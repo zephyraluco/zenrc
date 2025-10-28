@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 arrow = "*"
 nix = {version = "*", features = ["mman", "fs"]}
+thiserror = "2"
