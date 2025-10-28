@@ -5,6 +5,7 @@ members = ["zenrc-log", "zenrc-bt", "zenrc-shm"]
 [workspace.dependencies]
 nix = "0.30"
 time = "0.3"
+ctrlc = "3.5"
 arrow = "57"
 anyhow = "1.0"
 thiserror = "2"

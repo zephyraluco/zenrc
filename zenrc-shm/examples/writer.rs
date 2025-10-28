@@ -1,10 +1,11 @@
+use std::io::Cursor;
 use std::slice;
 use std::sync::Arc;
-use arrow::array::{Float32Array, StringArray, UInt32Array, UInt64Array, ListArray, RecordBatch};
-use arrow::datatypes::{DataType, Field, Fields, Float32Type, Schema};
+
+use arrow::array::{Float32Array, ListArray, RecordBatch, StringArray, UInt32Array, UInt64Array};
+use arrow::datatypes::{DataType, Field, Float32Type, Schema};
 use arrow::ipc::writer::StreamWriter;
 use zenrc_shm::shm::MemoryHandle;
-use std::io::Cursor;
 
 fn main() -> anyhow::Result<()> {
     // 共享内存
@@ -48,59 +49,65 @@ fn main() -> anyhow::Result<()> {
             false,
         ),
     ]));
-loop {
-    // ---------------------------
-    // 构造 RecordBatch
-    // ---------------------------
-	seq +=1;
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(UInt32Array::from(vec![seq])),
-            Arc::new(UInt64Array::from(vec![stamp_secs])),
-            Arc::new(UInt32Array::from(vec![stamp_nsecs])),
-            Arc::new(StringArray::from(vec![frame_id])),
-            Arc::new(Float32Array::from(vec![-1.7453293])),
-            Arc::new(Float32Array::from(vec![1.5707964])),
-            Arc::new(Float32Array::from(vec![0.00436325])),
-            Arc::new(Float32Array::from(vec![4.62963e-05])),
-            Arc::new(Float32Array::from(vec![0.06666667])),
-            Arc::new(Float32Array::from(vec![0.05])),
-            Arc::new(Float32Array::from(vec![30.0])),
-            Arc::new(ListArray::from_iter_primitive::<Float32Type, _, _>(vec![
-                Some(ranges.clone().into_iter().map(Some).collect::<Vec<Option<f32>>>()),
-            ])),
-        ],
-    )?;
+    loop {
+        // ---------------------------
+        // 构造 RecordBatch
+        // ---------------------------
+        seq += 1;
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt32Array::from(vec![seq])),
+                Arc::new(UInt64Array::from(vec![stamp_secs])),
+                Arc::new(UInt32Array::from(vec![stamp_nsecs])),
+                Arc::new(StringArray::from(vec![frame_id])),
+                Arc::new(Float32Array::from(vec![-1.7453293])),
+                Arc::new(Float32Array::from(vec![1.5707964])),
+                Arc::new(Float32Array::from(vec![0.00436325])),
+                Arc::new(Float32Array::from(vec![4.62963e-05])),
+                Arc::new(Float32Array::from(vec![0.06666667])),
+                Arc::new(Float32Array::from(vec![0.05])),
+                Arc::new(Float32Array::from(vec![30.0])),
+                Arc::new(ListArray::from_iter_primitive::<Float32Type, _, _>(vec![
+                    Some(
+                        ranges
+                            .clone()
+                            .into_iter()
+                            .map(Some)
+                            .collect::<Vec<Option<f32>>>(),
+                    ),
+                ])),
+            ],
+        )?;
 
-    // ---------------------------
-    // 写入 Arrow IPC 格式到内存缓冲区
-    // ---------------------------
-    let mut cursor = Cursor::new(Vec::new());
-    {
-        let mut writer = StreamWriter::try_new(&mut cursor, &schema)?;
-        writer.write(&batch)?;
-        writer.finish()?;
+        // ---------------------------
+        // 写入 Arrow IPC 格式到内存缓冲区
+        // ---------------------------
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let mut writer = StreamWriter::try_new(&mut cursor, &schema)?;
+            writer.write(&batch)?;
+            writer.finish()?;
+        }
+        let data = cursor.into_inner();
+
+        println!("Arrow encoded size: {} bytes", data.len());
+        if data.len() > size {
+            panic!("Shared memory too small for Arrow buffer");
+        }
+
+        // ---------------------------
+        // 拷贝到共享内存
+        // ---------------------------
+        unsafe {
+            let slice = slice::from_raw_parts_mut(mem_handle.get_mut_ptr().as_ptr(), data.len());
+            slice.copy_from_slice(&data);
+        }
+
+        println!("✅ Arrow RecordBatch (LaserScan) 已写入共享内存");
+        println!("前64字节: {:02X?}", &data[..64.min(data.len())]);
+
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    let data = cursor.into_inner();
-
-    println!("Arrow encoded size: {} bytes", data.len());
-    if data.len() > size {
-        panic!("Shared memory too small for Arrow buffer");
-    }
-
-    // ---------------------------
-    // 拷贝到共享内存
-    // ---------------------------
-    unsafe {
-        let slice = slice::from_raw_parts_mut(mem_handle.get_mut_ptr().as_ptr(), data.len());
-        slice.copy_from_slice(&data);
-    }
-
-    println!("✅ Arrow RecordBatch (LaserScan) 已写入共享内存");
-    println!("前64字节: {:02X?}", &data[..64.min(data.len())]);
-	
-		std::thread::sleep(std::time::Duration::from_millis(1));
-	}
     Ok(())
 }
