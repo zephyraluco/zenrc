@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["zenrc-log", "zenrc-bt"]
+members = ["zenrc-log", "zenrc-bt", "zenrc-shm"]
 
 [workspace.dependencies]
 time = "0.3"
