@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-arrow = "*"
-nix = {version = "*", features = ["mman", "fs"]}
-thiserror = "2"
+nix = { workspace = true, features = ["mman", "fs"] }
+arrow = { workspace = true }
+thiserror = { workspace = true }
