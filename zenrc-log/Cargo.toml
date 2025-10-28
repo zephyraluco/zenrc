@@ -1,0 +1,23 @@
+[package]
+name = "zenrc-log"
+version = "0.1.0"
+edition = "2024"
+authors = ["zeal"]
+license = "MIT OR Apache-2.0"
+
+[[example]]
+name = "span"
+path = "examples/span.rs"
+
+[dependencies]
+thiserror = { workspace = true }
+crossbeam-channel = { workspace = true }
+time = { workspace = true, features = [
+	"local-offset",
+	"macros",
+	"formatting",
+	"parsing",
+] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+# tracing-appender-localtime = "0.2"

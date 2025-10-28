@@ -1,0 +1,33 @@
+# 使用 Rustfmt 的 2024 风格预设（需 Rustfmt 支持该 edition）
+style_edition = "2024"
+# 对格式化时的启发式规则使用最“宽松”的模式，尽可能单行展示内容
+# use_small_heuristics = "Max"
+# 合并 #[derive(...)] 宏为一个声明（如果多个 derive 存在）
+merge_derives = true
+# 对 use/import 语句进行分组，标准库、外部 crate、本地 crate 各自成组
+group_imports = "StdExternalCrate"
+# 导入粒度为模块级别，即同一模块下的多个符号会被合并为一个 use 语句
+imports_granularity = "Module"
+# 如果结构体字段的初始化值与字段名相同，自动使用字段初始化简写语法（e.g., `Point { x, y }` 而非 `Point { x: x, y: y }`）
+use_field_init_shorthand = true
+# 尽可能将函数参数压缩在一行，仅当无法满足 max_width 时换行
+# fn_params_layout = "Compressed"
+# 控制结构体、函数等 item 的大括号风格：
+# - 当有 where 子句时，大括号另起一行；
+# - 否则与函数定义放在同一行
+brace_style = "SameLineWhere"
+# 控制流语句（if/else/while/match）的 `{` 始终另起一行（风格偏 GNU/C 风格）
+control_brace_style = "AlwaysSameLine"
+# 所有 match 分支体强制使用大括号 `{}` 包裹，提升代码一致性和扩展性
+match_arm_blocks = true
+# 禁止将结构体实例化（struct literal）格式化为单行
+struct_lit_single_line = false
+ # 使用空格代替制表符 (Tab)，即每一级缩进用若干空格，而不是硬Tab字符
+hard_tabs = false
+# 每一级缩进使用4个空格（如果 hard_tabs = false 生效）
+tab_spaces = 4
+# 每行最大字符数为200，超出后会自动换行。默认是100
+max_width = 100
+
+# 忽略格式化目录
+# ignore = ["library"]
