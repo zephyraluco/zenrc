@@ -1,0 +1,9 @@
+[package]
+name = "zenrc-bt"
+version = "0.1.0"
+edition = "2024"
+description = "A simple behavior tree library"
+
+[[example]]
+name = "printonde"
+path = "examples/printonde.rs"
