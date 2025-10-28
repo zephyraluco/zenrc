@@ -1,43 +1,95 @@
-use std::ffi::CString;
-use std::num::NonZeroUsize;
-use std::ptr::NonNull;
 use std::sync::Arc;
-
-use arrow::alloc::Allocation;
-use arrow::array::{ArrayData, Int32Array};
-use arrow::buffer::Buffer;
-use arrow::datatypes::DataType;
-use nix::fcntl::OFlag;
-use nix::sys::mman::{MapFlags, ProtFlags, mmap, shm_open};
+use std::io::Cursor;
+use std::slice;
 use zenrc_shm::shm::MemoryHandle;
+use arrow::array::{
+    Array, RecordBatch, ListArray, Float32Array, StringArray, UInt32Array, UInt64Array,
+};
+use arrow::ipc::reader::StreamReader;
+use anyhow::Result;
 
-// 不需要实现 Allocation
-#[derive(Debug)]
-struct SharedMemAlloc;
+fn main() -> Result<()> {
+    // 共享内存名称
+    let name = "/my_shared_mem_arrow";
+    let size: usize = 4096 * 64;
 
-fn main() {
-    let name = "/my_shared_mem";
+    // 打开现有共享内存
+    let mut mem_handle = MemoryHandle::open(name).expect("MemoryHandle::open failed");
 
-    let mut mem_handle = MemoryHandle::open(name).unwrap();
-    let len = 4; // 数组元素个数
-    let byte_len = len * std::mem::size_of::<i32>();
+    // 获取数据指针
+    let data = unsafe { slice::from_raw_parts(mem_handle.get_mut_ptr().as_ptr(), size) };
+loop{
+    // 使用 Arrow IPC Reader 解析
+    let mut reader = StreamReader::try_new(Cursor::new(data), None)?;
 
-    // 将 mmap 封装为 Arrow Buffer（零拷贝）
-    let ptr = NonNull::new(mem_handle.get_mut_ptr().as_ptr()).unwrap();
-    let buffer = unsafe { Buffer::from_custom_allocation(ptr, byte_len, Arc::new(SharedMemAlloc)) };
+    println!("✅ 成功读取共享内存中的 Arrow 流");
 
-    // ✅ 用 ArrayData 构造 Int32Array
-    let array_data = ArrayData::try_new(
-        DataType::Int32, // 数据类型
-        len,             // 元素个数
-        None,            // null bitmap（这里没有 null）
-        0,            // offset（偏移量）
-        vec![buffer], // 数据缓冲区（一个或多个）
-        vec![],       // 子数组（struct/list 用，这里为空）
-    )
-    .unwrap();
+    while let Some(batch_result) = reader.next() {
+        let batch = batch_result?;
+        println!("RecordBatch 中包含 {} 行, {} 列", batch.num_rows(), batch.num_columns());
 
-    let arr = Int32Array::from(array_data);
+        // 提取字段
+        let seq_arr = batch
+            .column_by_name("seq")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+        let seq = seq_arr.value(0);
 
-    println!("✅ Reader: read Int32Array = {:?}", arr);
+        let stamp_secs_arr = batch
+            .column_by_name("stamp_secs")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        let stamp_secs = stamp_secs_arr.value(0);
+
+        let stamp_nsecs_arr = batch
+            .column_by_name("stamp_nsecs")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+        let stamp_nsecs = stamp_nsecs_arr.value(0);
+
+        let frame_id_arr = batch
+            .column_by_name("frame_id")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let frame_id = frame_id_arr.value(0);
+
+        // 提取 ranges
+        let ranges_arr = batch
+            .column_by_name("ranges")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+
+        let float_values = ranges_arr.value(0);
+        let float_arr = float_values.as_any().downcast_ref::<Float32Array>().unwrap();
+
+        let mut ranges = Vec::new();
+        for i in 0..float_arr.len() {
+            if float_arr.is_null(i) {
+                ranges.push(f32::NAN);
+            } else {
+                ranges.push(float_arr.value(i));
+            }
+        }
+
+        // 打印结果
+        println!("LaserScan 数据：");
+        println!("  seq: {}", seq);
+        println!("  stamp: {}.{}", stamp_secs, stamp_nsecs);
+        println!("  frame_id: {}", frame_id);
+        println!("  ranges[0..10]: {:?}", &ranges[0..ranges.len()]);
+        println!("  ranges.len(): {}", ranges.len());
+		std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+    Ok(())
 }

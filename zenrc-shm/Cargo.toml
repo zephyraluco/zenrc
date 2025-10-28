@@ -7,3 +7,4 @@ edition = "2024"
 nix = { workspace = true, features = ["mman", "fs"] }
 arrow = { workspace = true }
 thiserror = { workspace = true }
+anyhow = { workspace = true }
