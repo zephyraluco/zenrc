@@ -30,4 +30,6 @@ pub enum RwLockError {
     ReadUnlockError(i32),
     #[error("Failed to unlock Write RwLock with code {0}")]
     WriteUnlockError(i32),
+    #[error("Try into SharedRwLock failed due to invalid pointer")]
+    IntoError,
 }

@@ -54,7 +54,7 @@ pub struct SharedRwLockReadGuard<'t, T> {
 impl<'t, T> Drop for SharedRwLockReadGuard<'t, T> {
     fn drop(&mut self) {
         println!("SharedRwLockReadGuard::drop called");
-        unsafe { nix::libc::pthread_rwlock_rdlock(*self.lock) };
+        unsafe { nix::libc::pthread_rwlock_unlock(*self.lock) };
     }
 }
 impl<'t, T> SharedRwLockReadGuard<'t, T> {
@@ -78,7 +78,7 @@ pub struct SharedRwLockWriteGuard<'t, T> {
 impl<'t, T> Drop for SharedRwLockWriteGuard<'t, T> {
     fn drop(&mut self) {
         println!("SharedRwLockWriteGuard::drop called");
-        self.lock.write_unlock().unwrap();
+        self.lock.unlock().unwrap();
     }
 }
 impl<'t, T> SharedRwLockWriteGuard<'t, T> {
@@ -156,7 +156,10 @@ impl SharedMutex {
                 ptr,
                 data: UnsafeCell::new(data),
             };
-            Ok((shared_mutex, padding + std::mem::size_of::<pthread_mutex_t>()))
+            Ok((
+                shared_mutex,
+                padding + std::mem::size_of::<pthread_mutex_t>(),
+            ))
         }
     }
 
@@ -169,7 +172,10 @@ impl SharedMutex {
                 ptr,
                 data: UnsafeCell::new(data),
             };
-            (shared_mutex, padding + std::mem::size_of::<pthread_mutex_t>())
+            (
+                shared_mutex,
+                padding + std::mem::size_of::<pthread_mutex_t>(),
+            )
         }
     }
 
@@ -286,11 +292,14 @@ impl<T> SharedRwLock<T> {
                 ptr,
                 data: UnsafeCell::new(data_ptr),
             };
-            Ok((shared_rwlock, padding + std::mem::size_of::<pthread_rwlock_t>()))
+            Ok((
+                shared_rwlock,
+                padding + std::mem::size_of::<pthread_rwlock_t>() + std::mem::size_of::<T>(),
+            ))
         }
     }
 
-    unsafe fn try_into(mem: *mut u8, data: *mut u8) -> (Self, usize) {
+    pub fn try_into(mem: *mut u8) -> Result<(Self, usize), RwLockError> {
         unsafe {
             let padding = mem.align_offset(std::mem::size_of::<*mut u8>() as _);
             let ptr = mem.add(padding) as *mut pthread_rwlock_t;
@@ -299,7 +308,14 @@ impl<T> SharedRwLock<T> {
                 ptr,
                 data: UnsafeCell::new(data_ptr),
             };
-            (shared_rwlock, padding + std::mem::size_of::<pthread_rwlock_t>())
+            //TODO: 检查指针有效性
+            if ptr.is_null() || data_ptr.is_null() {
+                return Err(RwLockError::IntoError);
+            }
+            Ok((
+                shared_rwlock,
+                padding + std::mem::size_of::<pthread_rwlock_t>() + std::mem::size_of::<T>(),
+            ))
         }
     }
 
@@ -331,15 +347,6 @@ impl<T> SharedRwLock<T> {
         }
     }
 
-    fn read_unlock(&self) -> Result<(), RwLockError> {
-        unsafe {
-            match nix::libc::pthread_rwlock_unlock(self.ptr) {
-                0 => Ok(()),
-                err_code => Err(RwLockError::ReadUnlockError(err_code)),
-            }
-        }
-    }
-
     pub fn write(&self) -> Result<SharedRwLockWriteGuard<'_, T>, RwLockError> {
         unsafe {
             match nix::libc::pthread_rwlock_wrlock(self.ptr) {
@@ -362,7 +369,7 @@ impl<T> SharedRwLock<T> {
         }
     }
 
-    fn write_unlock(&self) -> Result<(), RwLockError> {
+    fn unlock(&self) -> Result<(), RwLockError> {
         unsafe {
             match nix::libc::pthread_rwlock_unlock(self.ptr) {
                 0 => Ok(()),
