@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 use std::os::fd::{IntoRawFd, RawFd};
 use std::ptr::NonNull;
 
-use nix::fcntl::OFlag;
+use nix::fcntl::{OFlag, open};
 use nix::sys::mman::{MapFlags, ProtFlags, mmap, munmap, shm_open, shm_unlink};
 use nix::sys::stat::fstat;
 use nix::unistd::{close, ftruncate};
@@ -37,7 +37,11 @@ impl Drop for MemoryHandle {
 
 impl MemoryHandle {
     pub fn new<T: Into<String>>(name: T, size: usize) -> Result<Self, std::io::Error> {
-		let name= name.into();
+        let name = name.into();
+        let path = std::path::Path::new("/dev/shm").join(&name[1..]);
+        if path.exists() {
+            return MemoryHandle::open(name);
+        }
         let fd = shm_open(
             name.as_str(),
             OFlag::O_CREAT | OFlag::O_RDWR, //创建并可读写
@@ -67,14 +71,14 @@ impl MemoryHandle {
         })
     }
 
-    pub fn open<T: Into<String>>(name: T,) -> Result<Self, std::io::Error> {
-		let name= name.into();
+    pub fn open<T: Into<String>>(name: T) -> Result<Self, std::io::Error> {
+        let name = name.into();
         let fd = shm_open(
             name.as_str(),
-            OFlag::O_RDWR,                                                 //可读写
+            OFlag::O_RDWR,                 //可读写
             nix::sys::stat::Mode::S_IRUSR, //主有者可读
         )?;
-		let size = fstat(&fd).unwrap().st_size as usize;
+        let size = fstat(&fd).unwrap().st_size as usize;
         let nz_size = NonZeroUsize::new(size).unwrap();
         let ptr = unsafe {
             //映射到进程的虚拟内存
@@ -101,5 +105,8 @@ impl MemoryHandle {
     }
     pub fn set_owner(&mut self, owner: bool) {
         self.owner = owner;
+    }
+    pub fn is_owner(&self) -> bool {
+        self.owner
     }
 }

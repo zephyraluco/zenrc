@@ -32,4 +32,6 @@ pub enum RwLockError {
     WriteUnlockError(i32),
     #[error("Try into SharedRwLock failed due to invalid pointer")]
     IntoError,
+	#[error("RwLock is empty, no data to read")]
+	Empty,
 }

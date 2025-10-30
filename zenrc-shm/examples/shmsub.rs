@@ -8,8 +8,8 @@ fn main() {
     let mut mem_handle = MemoryHandle::open(name).expect("MemoryHandle::new failed");
     let ring_buffer = MpmcRingBuffer::<i32>::try_into(mem_handle.get_mut_ptr().as_ptr()).unwrap();
     loop {
-        let value = ring_buffer.read();
+        let value = ring_buffer.read().unwrap();
         println!("Read value from shared memory: {}", value);
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
