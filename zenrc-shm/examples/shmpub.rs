@@ -12,7 +12,7 @@ fn main() {
     // 注册 Ctrl+C 处理器
     ctrlc::set_handler(move || {
         eprintln!("\nCtrl+C detected, shutting down...");
-        r.store(false, Ordering::SeqCst);
+        r.store(false, Ordering::Relaxed);
     })
     .expect("Error setting Ctrl-C handler");
 
@@ -25,7 +25,7 @@ fn main() {
     let ring_buffer = MpmcRingBuffer::<i32>::new(&mut mem_handle, 10).unwrap();
 
     // 主循环
-    while running.load(Ordering::SeqCst) {
+    while running.load(Ordering::Acquire) {
         ring_buffer.write(data);
         println!("Wrote value to shared memory: {}", data);
         data += 1;

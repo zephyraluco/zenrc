@@ -20,33 +20,34 @@ pub enum Timeout {
     Val(std::time::Duration),
 }
 /// 共享互斥锁的守护结构
-pub struct SharedMutexGuard<'t> {
-    lock: &'t SharedMutex,
+pub struct SharedMutexGuard<'t, T> {
+    lock: &'t SharedMutex<T>,
 }
-impl<'t> Drop for SharedMutexGuard<'t> {
+impl<'t, T> Drop for SharedMutexGuard<'t, T> {
     fn drop(&mut self) {
         self.lock.unlock().unwrap();
     }
 }
-impl<'t> SharedMutexGuard<'t> {
-    fn new(lock: &'t SharedMutex) -> Self {
+impl<'t, T> SharedMutexGuard<'t, T> {
+    fn new(lock: &'t SharedMutex<T>) -> Self {
         Self {
             lock,
         }
     }
 }
-impl<'t> Deref for SharedMutexGuard<'t> {
-    type Target = *mut u8;
+impl<'t, T> Deref for SharedMutexGuard<'t, T> {
+    type Target = T;
     fn deref(&self) -> &Self::Target {
-        unsafe { self.lock.into_inner() }
+        unsafe { &*self.lock.into_inner() }
     }
 }
-impl<'t> DerefMut for SharedMutexGuard<'t> {
+impl<'t, T> DerefMut for SharedMutexGuard<'t, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { self.lock.into_inner() }
+        unsafe { &mut *self.lock.into_inner() }
     }
 }
 
+/// 共享读写锁的读守护结构
 pub struct SharedRwLockReadGuard<'t, T> {
     data: NonNull<T>,
     lock: &'t *mut pthread_rwlock_t,
@@ -72,6 +73,7 @@ impl<'t, T> Deref for SharedRwLockReadGuard<'t, T> {
     }
 }
 
+/// 共享读写锁的写守护结构
 pub struct SharedRwLockWriteGuard<'t, T> {
     lock: &'t SharedRwLock<T>,
 }
@@ -106,12 +108,12 @@ pub struct SharedCondVar {
 }
 
 /// 用于进程间同步的共享互斥锁结构
-pub struct SharedMutex {
+pub struct SharedMutex<T> {
     ptr: *mut pthread_mutex_t,
-    data: UnsafeCell<*mut u8>,
+    data: UnsafeCell<*mut T>,
 }
 
-impl Drop for SharedMutex {
+impl<T> Drop for SharedMutex<T> {
     fn drop(&mut self) {
         unsafe {
             nix::libc::pthread_mutex_destroy(self.ptr);
@@ -119,9 +121,9 @@ impl Drop for SharedMutex {
     }
 }
 
-impl SharedMutex {
+impl<T> SharedMutex<T> {
     /// 在提供的缓冲区中初始化锁的新实例，并返回使用的字节数
-    unsafe fn new(mem: *mut u8, data: *mut u8) -> Result<(Self, usize), MutexLockError> {
+    unsafe fn new(mem: *mut u8, data: T) -> Result<(Self, usize), MutexLockError> {
         unsafe {
             // 计算在当前内存地址 mem 之后，需要填充（padding）多少字节才能使接下来的数据对齐到指针 (*mut u8) 的边界上
             let padding = mem.align_offset(std::mem::size_of::<*mut u8>() as _);
@@ -152,29 +154,32 @@ impl SharedMutex {
                     return Err(MutexLockError::InitError(err_code));
                 }
             }
+            let data_ptr = mem.add(padding + std::mem::size_of::<pthread_mutex_t>()) as *mut T;
+            std::ptr::write(data_ptr, data);
             let shared_mutex = Self {
                 ptr,
-                data: UnsafeCell::new(data),
+                data: UnsafeCell::new(data_ptr),
             };
             Ok((
                 shared_mutex,
-                padding + std::mem::size_of::<pthread_mutex_t>(),
+                padding + std::mem::size_of::<pthread_mutex_t>() + std::mem::size_of::<T>(),
             ))
         }
     }
 
     /// 从已初始化的内存位置重用锁，并返回使用的字节数
-    unsafe fn try_into(mem: *mut u8, data: *mut u8) -> (Self, usize) {
+    unsafe fn try_into(mem: *mut u8) -> (Self, usize) {
         unsafe {
             let padding = mem.align_offset(std::mem::size_of::<*mut u8>() as _);
             let ptr = mem.add(padding) as *mut pthread_mutex_t;
+            let data_ptr = mem.add(padding + std::mem::size_of::<pthread_mutex_t>()) as *mut T;
             let shared_mutex = Self {
                 ptr,
-                data: UnsafeCell::new(data),
+                data: UnsafeCell::new(data_ptr),
             };
             (
                 shared_mutex,
-                padding + std::mem::size_of::<pthread_mutex_t>(),
+                padding + std::mem::size_of::<pthread_mutex_t>() + std::mem::size_of::<T>(),
             )
         }
     }
@@ -184,7 +189,7 @@ impl SharedMutex {
     }
 
     /// Acquires the lock
-    fn lock(&self) -> Result<SharedMutexGuard<'_>, MutexLockError> {
+    fn lock(&self) -> Result<SharedMutexGuard<'_, T>, MutexLockError> {
         unsafe {
             match nix::libc::pthread_mutex_lock(self.ptr) {
                 0 => Ok(SharedMutexGuard::new(self)),
@@ -193,7 +198,7 @@ impl SharedMutex {
         }
     }
 
-    fn try_lock(&self) -> Result<SharedMutexGuard<'_>, MutexLockError> {
+    fn try_lock(&self) -> Result<SharedMutexGuard<'_, T>, MutexLockError> {
         unsafe {
             match nix::libc::pthread_mutex_trylock(self.ptr) {
                 0 => Ok(SharedMutexGuard::new(self)),
@@ -202,7 +207,7 @@ impl SharedMutex {
         }
     }
     /// Acquires lock with timeout
-    fn time_lock(&self, timeout: Timeout) -> Result<SharedMutexGuard<'_>, MutexLockError> {
+    fn time_lock(&self, timeout: Timeout) -> Result<SharedMutexGuard<'_, T>, MutexLockError> {
         // For simplicity, we ignore timeout and just try to lock
         let timespec = match timeout {
             Timeout::Infinite => return self.lock(),
@@ -236,8 +241,8 @@ impl SharedMutex {
     }
 
     #[allow(clippy::mut_from_ref)]
-    unsafe fn into_inner(&self) -> &mut *mut u8 {
-        unsafe { &mut *self.data.get() }
+    unsafe fn into_inner(&self) -> *mut T {
+        unsafe { *self.data.get() }
     }
 }
 

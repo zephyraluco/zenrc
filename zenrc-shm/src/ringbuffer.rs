@@ -49,7 +49,7 @@ impl<T: Default> MpmcRingBuffer<T> {
 
     pub fn write(&self, value: T) {
         let write_seq =
-            unsafe { (*self.write_seq).fetch_add(1, std::sync::atomic::Ordering::SeqCst) };
+            unsafe { (*self.write_seq).fetch_add(1, std::sync::atomic::Ordering::Release) };
         let index = write_seq % unsafe { *self.capacity };
         println!("Writing at write_seq: {}", write_seq);
         let mut guard = self.buffer[index].write().unwrap();
@@ -61,13 +61,13 @@ impl<T: Default> MpmcRingBuffer<T> {
         T: Copy,
     {
         println!("Current read_seq: {}", self.read_seq.get());
-        let seq = unsafe { (*self.write_seq).load(std::sync::atomic::Ordering::SeqCst) };
+        let seq = unsafe { (*self.write_seq).load(std::sync::atomic::Ordering::Acquire) };
         if self.read_seq.get() == 0 {
             self.read_seq.set(seq);
         } else if self.read_seq.get() < seq {
             self.read_seq.set(self.read_seq.get() + 1);
         } else {
-            return Err(errors::RwLockError::Empty);
+            // return Err(errors::RwLockError::Empty);
         }
         let index = (self.read_seq.get() - 1) % unsafe { *self.capacity };
         let guard = self.buffer[index].read().unwrap();
