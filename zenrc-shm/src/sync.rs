@@ -30,9 +30,7 @@ impl<'t, T> Drop for SharedMutexGuard<'t, T> {
 }
 impl<'t, T> SharedMutexGuard<'t, T> {
     fn new(lock: &'t SharedMutex<T>) -> Self {
-        Self {
-            lock,
-        }
+        Self { lock }
     }
 }
 impl<'t, T> Deref for SharedMutexGuard<'t, T> {
@@ -85,9 +83,7 @@ impl<'t, T> Drop for SharedRwLockWriteGuard<'t, T> {
 }
 impl<'t, T> SharedRwLockWriteGuard<'t, T> {
     fn new(lock: &'t SharedRwLock<T>) -> Self {
-        Self {
-            lock,
-        }
+        Self { lock }
     }
 }
 impl<'t, T> Deref for SharedRwLockWriteGuard<'t, T> {
@@ -206,6 +202,8 @@ impl<T> SharedMutex<T> {
             }
         }
     }
+
+    #[cfg(target_os = "linux")]
     /// Acquires lock with timeout
     fn time_lock(&self, timeout: Timeout) -> Result<SharedMutexGuard<'_, T>, MutexLockError> {
         // For simplicity, we ignore timeout and just try to lock
@@ -355,9 +353,7 @@ impl<T> SharedRwLock<T> {
     pub fn write(&self) -> Result<SharedRwLockWriteGuard<'_, T>, RwLockError> {
         unsafe {
             match nix::libc::pthread_rwlock_wrlock(self.ptr) {
-                0 => Ok(SharedRwLockWriteGuard {
-                    lock: self,
-                }),
+                0 => Ok(SharedRwLockWriteGuard { lock: self }),
                 err_code => Err(RwLockError::WriteLockError(err_code)),
             }
         }
@@ -366,9 +362,7 @@ impl<T> SharedRwLock<T> {
     fn try_write(&self) -> Result<SharedRwLockWriteGuard<'_, T>, RwLockError> {
         unsafe {
             match nix::libc::pthread_rwlock_trywrlock(self.ptr) {
-                0 => Ok(SharedRwLockWriteGuard {
-                    lock: self,
-                }),
+                0 => Ok(SharedRwLockWriteGuard { lock: self }),
                 err_code => Err(RwLockError::TryWriteLockError(err_code)),
             }
         }

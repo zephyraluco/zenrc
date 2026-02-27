@@ -1,5 +1,4 @@
 pub mod appender;
-pub mod filter;
 pub mod formatter;
 use std::path::Path;
 
@@ -12,9 +11,8 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::formatter::LogFormatter;
 
-pub use tracing::{info, warn, error, debug, trace};
 pub use tracing::Level;
-
+pub use tracing::{debug, error, info, trace, warn};
 
 pub enum Period {
     Minute,
@@ -38,7 +36,7 @@ pub struct SubscriberBuilder<E = LogFormatter> {
     event_formatter: E,
     level: Level,
     directory: String,
-	appender_builder: appender::builder::Builder,
+    appender_builder: appender::builder::Builder,
 }
 
 impl SubscriberBuilder {
@@ -47,7 +45,7 @@ impl SubscriberBuilder {
             event_formatter: LogFormatter,
             level: Level::INFO,
             directory: String::new(),
-			appender_builder: RollingFileAppender::builder(),
+            appender_builder: RollingFileAppender::builder(),
         }
     }
 }
@@ -63,17 +61,14 @@ where
         }
     }
     pub fn with_level(self, level: Level) -> Self {
-        SubscriberBuilder {
-            level,
-            ..self
-        }
+        SubscriberBuilder { level, ..self }
     }
     pub fn with_path(self, path: impl Into<String>) -> Self {
-		let path = path.into();
+        let path = path.into();
         let file_name = Path::new(&path).file_name().unwrap().to_str().unwrap();
-            let directory = Path::new(&path).parent().unwrap().to_str().unwrap();
-		SubscriberBuilder {
-			directory: directory.into(),
+        let directory = Path::new(&path).parent().unwrap().to_str().unwrap();
+        SubscriberBuilder {
+            directory: directory.into(),
             appender_builder: self.appender_builder.filename(file_name),
             ..self
         }
@@ -90,7 +85,11 @@ where
             ..self
         }
     }
-    pub fn with_filter(self, target: impl Into<String>, filename: impl Into<String>) -> SubscriberBuilder<E> {
+    pub fn with_filter(
+        self,
+        target: impl Into<String>,
+        filename: impl Into<String>,
+    ) -> SubscriberBuilder<E> {
         let target = target.into();
         let filename = filename.into();
         Self {
@@ -102,28 +101,30 @@ where
     pub fn init(self) {
         if self.directory.is_empty() {
             let filter = tracing_subscriber::filter::LevelFilter::from_level(self.level);
-            let layer = fmt::layer().event_format(self.event_formatter).with_ansi(false);
-            tracing_subscriber::registry().with(layer).with(filter).init();
+            let layer = fmt::layer()
+                .event_format(self.event_formatter)
+                .with_ansi(false);
+            tracing_subscriber::registry()
+                .with(layer)
+                .with(filter)
+                .init();
         } else {
             // let file_name = Path::new(&self.path).file_name().unwrap().to_str().unwrap();
             // let dir = Path::new(&self.path).parent().unwrap().to_str().unwrap();
-            let file_appender = 
-			// RollingFileAppender::builder()
-            //     .rotation(self.period.into())
-            //     .max_log_files(self.max_log_files)
-            //     .filename(file_name)
-			// 	.filter(self.filters)
-			self.appender_builder
+            let file_appender = self
+                .appender_builder
                 .build(self.directory)
                 .expect("failed to initialize rolling file appender");
-
 
             let layer = fmt::layer()
                 .event_format(self.event_formatter)
                 .with_writer(file_appender)
                 .with_ansi(false);
             let filter = tracing_subscriber::filter::LevelFilter::from_level(self.level);
-            tracing_subscriber::registry().with(layer).with(filter).init();
+            tracing_subscriber::registry()
+                .with(layer)
+                .with(filter)
+                .init();
         }
     }
 }

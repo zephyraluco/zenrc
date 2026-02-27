@@ -1,12 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["zenrc-log", "zenrc-bt", "zenrc-shm"]
+members = ["zenrc-log", "zenrc-bt", "zenrc-shm", "zenrc-macros", "zenrc-dds"]
 
 [workspace.dependencies]
-nix = "0.30"
+nix = "0.31"
 time = "0.3"
 ctrlc = "3.5"
-arrow = "57"
+arrow = "58"
 anyhow = "1.0"
 thiserror = "2"
 crossbeam-channel = "0.5"
