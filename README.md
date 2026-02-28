@@ -33,6 +33,14 @@ DDS（Data Distribution Service）的 Rust 绑定。
 - 使用 bindgen 自动生成 FFI 绑定
 - 支持发布-订阅模式的分布式数据通信
 
+### zenrc-rcl
+ROS2 RCL（ROS Client Library）的 Rust FFI 绑定。
+
+- 自动生成 ROS2 C API 的 Rust 绑定
+- 支持多个 ROS2 发行版（Foxy、Galactic、Humble、Iron、Jazzy、Rolling）
+- 智能缓存机制加速构建
+- 跨平台支持（Linux/macOS/Windows）
+
 ### zenrc-macros
 为其他 zenrc 模块提供过程宏支持。
 
@@ -50,6 +58,7 @@ DDS（Data Distribution Service）的 Rust 绑定。
 ## 路线图
 
 - [ ] 完善 zenrc-dds 的 API 封装
+- [ ] 完善 zenrc-rcl 的 API 封装
 - [ ] 为各模块添加完整的文档和示例
 - [ ] 添加性能基准测试
 - [ ] 支持更多行为树节点类型

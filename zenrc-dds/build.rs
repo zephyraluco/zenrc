@@ -1,19 +1,29 @@
 use std::path::PathBuf;
 
 fn main() {
-    // 使用 pkg-config 查找 cyclonedds
-    let include_paths = match pkg_config::Config::new().probe("CycloneDDS") {
-        Ok(lib) => lib.include_paths,
+    // 使用 pkg-config 查找 dds
+    let dds = match pkg_config::Config::new().probe("CycloneDDS") {
+        Ok(lib) => lib,
         Err(e) => {
             panic!("Failed to find CycloneDDS via pkg-config: {}", e);
         }
     };
 
+    // 告诉 cargo 链接库的位置
+    for path in &dds.link_paths {
+        println!("cargo:rustc-link-search=native={}", path.display());
+    }
+
+    // 告诉 cargo 需要链接的库
+    for lib in &dds.libs {
+        println!("cargo:rustc-link-lib={}", lib);
+    }
+
     // 生成 Rust 绑定
     let bindings = bindgen::Builder::default()
         .header("wrapper.hpp")
         .clang_args(
-            include_paths
+            dds.include_paths
                 .iter()
                 .map(|path| format!("-I{}", path.display())),
         )
