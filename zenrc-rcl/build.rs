@@ -1,3 +1,5 @@
+mod msg_gen;
+use msg_gen::*;
 use os_str_bytes::RawOsString;
 use sha2::{Digest, Sha256};
 use std::{
@@ -20,6 +22,9 @@ fn main() {
     println!("正在生成绑定文件...");
     print_cargo_watches();
     print_cargo_ros_distro();
+    let ros_msgs = collect_ros_msgs();
+    generate_includes(&ros_msgs);
+    generate_introspection_map(&PathBuf::from(env::var_os("OUT_DIR").unwrap()), &ros_msgs);
     run_bindgen();
     run_dynlink();
 }
@@ -166,33 +171,19 @@ fn print_cargo_link_search() {
 fn run_bindgen() {
     let env_hash = get_env_hash();
     let out_dir: PathBuf = env::var_os("OUT_DIR").unwrap().into();
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let bindgen_dir = out_dir.join(env_hash);
-    let cached_file = bindgen_dir.join("bindings.rs");
+    let cached_file = bindgen_dir.join("rcl_bindings.rs");
     let mark_file = bindgen_dir.join("done");
-    let target_file = out_dir.join("bindings.rs");
+    let target_file = out_dir.join("rcl_bindings.rs");
 
     if !mark_file.exists() {
         eprintln!("Generate bindings file '{}'", cached_file.display());
-        gen_bindings(&cached_file);
+        gen_bindings(&target_file);
         touch(&mark_file);
     } else {
         eprintln!("Use cached bindings file '{}'", cached_file.display());
     }
-
-    #[cfg(feature = "save-bindgen")]
-    {
-        let saved_file = manifest_dir.join("bindings").join("bindings.rs");
-        if let Some(dir) = saved_file.parent() {
-            fs::create_dir_all(dir)
-                .unwrap_or_else(|_| panic!("Unable to create directory '{}'", dir.display()));
-        }
-        fs::copy(&cached_file, &saved_file).expect("File copy failed");
-    }
-
-    fs::copy(&cached_file, &target_file).unwrap_or_else(|_| {
-        panic!("Unable to copy from '{}' to '{}'", cached_file.display(), target_file.display())
-    });
 }
 
 fn run_dynlink() {
@@ -208,13 +199,14 @@ fn run_dynlink() {
 }
 
 fn gen_bindings(out_file: &Path) {
-    if let Some(dir) = out_file.parent() {
-        fs::create_dir_all(dir)
-            .unwrap_or_else(|_| panic!("Unable to create directory '{}'", dir.display()));
-    }
-
-    let bindings = setup_bindgen_builder()
+let out_dir: PathBuf = env::var_os("OUT_DIR").unwrap().into();
+        let includes_file = out_dir.join("msg_includes.h");
+        let bindings = setup_bindgen_builder()
         .header("wrapper.hpp")
+        .header(includes_file.to_str().unwrap())
+        .allowlist_function(r"[\w_]*__(msg|srv|action)__[\w_]*__(create|destroy)")
+        .allowlist_function(r"[\w_]*__(msg|srv|action)__[\w_]*__Sequence__(init|fini)")
+        .allowlist_var(r"[\w_]*__(msg|srv|action)__[\w_]*__[\w_]*")
         .allowlist_type("rcl_.*")
         .allowlist_type("rcutils_.*")
         .allowlist_type("rmw_.*")
@@ -232,6 +224,8 @@ fn gen_bindings(out_file: &Path) {
         .allowlist_function(".*_typesupport_.*")
         .allowlist_function(".*_sequence_bound_.*")
         .no_debug("_OSUnaligned.*")
+        .size_t_is_usize(true)
+        .merge_extern_blocks(true)
         .derive_partialeq(true)
         .derive_copy(true)
         .generate_comments(false)
@@ -244,6 +238,10 @@ fn gen_bindings(out_file: &Path) {
 }
 
 fn touch(path: &Path) {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)
+            .unwrap_or_else(|_| panic!("Unable to create directory '{}'", dir.display()));
+    }
     OpenOptions::new()
         .create(true)
         .truncate(true)
