@@ -1,8 +1,11 @@
-use os_str_bytes::RawOsString;
 use rayon::prelude::*;
 use regex::Regex;
 use std::{
-    env, fs::{self, OpenOptions}, io::Write, iter::chain, path::{Path, PathBuf}
+    env,
+    fs::{self, OpenOptions},
+    io::Write,
+    iter::chain,
+    path::{Path, PathBuf},
 };
 const SRV_SUFFICES: &[&str] = &["Request", "Response"];
 const ACTION_SUFFICES: &[&str] = &["Goal", "Result", "Feedback", "FeedbackMessage"];
@@ -18,7 +21,11 @@ pub struct RosMsg {
 pub fn collect_ros_msgs() -> Vec<RosMsg> {
     let mut msgs = Vec::new();
     let mut paths = Vec::new();
-    let split_char = if cfg!(target_os = "windows") { ';' } else { ':' };
+    let split_char = if cfg!(target_os = "windows") {
+        ';'
+    } else {
+        ':'
+    };
     // 检查是否设置了 CMAKE_IDL_PACKAGES
     if let Ok(cmake_idl_packages) = env::var("CMAKE_IDL_PACKAGES") {
         for package_dir in cmake_idl_packages.split(split_char) {
@@ -72,7 +79,13 @@ pub fn collect_ros_msgs() -> Vec<RosMsg> {
             }
         }
     }
-
+    // 对消息列表进行排序，确保生成的代码顺序稳定
+    msgs.sort_by(|a, b| {
+        a.module
+            .cmp(&b.module)
+            .then(a.prefix.cmp(&b.prefix))
+            .then(a.name.cmp(&b.name))
+    });
     // 应用过滤器（如果设置了 IDL_PACKAGE_FILTER）
     if let Ok(filter) = env::var("IDL_PACKAGE_FILTER") {
         let filters: Vec<&str> = filter.split(',').map(|s| s.trim()).collect();
@@ -98,9 +111,9 @@ pub fn camel_to_snake(s: &str) -> String {
 }
 
 /// 生成 C 头文件包含语句，写入 msg_includes.h
-pub fn generate_includes(msgs: &[RosMsg]) {
+pub fn generate_includes(file_name: &str, msgs: &[RosMsg]) {
     let out_dir: PathBuf = env::var_os("OUT_DIR").unwrap().into();
-    let includes_file = out_dir.join("msg_includes.h");
+    let includes_file = out_dir.join(file_name);
 
     let mut file = OpenOptions::new()
         .create(true)
@@ -119,14 +132,16 @@ pub fn generate_includes(msgs: &[RosMsg]) {
             file,
             "#include <{}/{}/{}.h>",
             msg.module, msg.prefix, snake_name
-        ).unwrap();
+        )
+        .unwrap();
 
         // introspection 头文件
         writeln!(
             file,
             "#include <{}/{}/detail/{}__rosidl_typesupport_introspection_c.h>",
             msg.module, msg.prefix, snake_name
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     println!("cargo:rerun-if-changed={}", includes_file.display());
@@ -135,8 +150,9 @@ pub fn generate_includes(msgs: &[RosMsg]) {
 
 /// 生成 introspection 函数映射表
 /// 根据消息列表生成编译时完美哈希表
-pub fn generate_introspection_map(bindgen_dir: &Path,msg_list: &[RosMsg]) {
-    let map_file = bindgen_dir.join("introspection_maps.rs");
+pub fn generate_introspection_map(file_name: &str, msg_list: &[RosMsg]) {
+    let out_dir: PathBuf = env::var_os("OUT_DIR").unwrap().into();
+    let map_file = out_dir.join(file_name);
 
     // 收集所有映射条目（使用并行迭代器）
     let entries: Vec<_> = msg_list
@@ -215,7 +231,11 @@ pub fn generate_introspection_map(bindgen_dir: &Path,msg_list: &[RosMsg]) {
         .unwrap_or_else(|_| panic!("Unable to create file '{}'", map_file.display()));
 
     writeln!(file, "// 自动生成的 introspection 函数映射表").unwrap();
-    writeln!(file, "type IntrospectionFn = unsafe extern \"C\" fn() -> *const rosidl_message_type_support_t;").unwrap();
+    writeln!(
+        file,
+        "type IntrospectionFn = unsafe extern \"C\" fn() -> *const rosidl_message_type_support_t;"
+    )
+    .unwrap();
     writeln!(
         file,
         "pub static INTROSPECTION_MAP: phf::Map<&'static str, IntrospectionFn> = phf::phf_map! {{"
@@ -233,4 +253,27 @@ pub fn generate_introspection_map(bindgen_dir: &Path,msg_list: &[RosMsg]) {
         entries.len(),
         map_file.display()
     );
+}
+
+/// 为所有消息模块生成 Cargo 链接库指令
+pub fn print_msg_link_libs(ros_msgs: &[RosMsg]) {
+    let mut modules_vec: Vec<String> = ros_msgs
+        .iter()
+        .map(|m| m.module.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    modules_vec.sort();
+
+    for module in modules_vec {
+        println!(
+            "cargo:rustc-link-lib=dylib={}__rosidl_typesupport_c",
+            module
+        );
+        println!(
+            "cargo:rustc-link-lib=dylib={}__rosidl_typesupport_introspection_c",
+            module
+        );
+        println!("cargo:rustc-link-lib=dylib={}__rosidl_generator_c", module);
+    }
 }

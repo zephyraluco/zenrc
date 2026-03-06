@@ -3,6 +3,14 @@ name = "zenrc-rcl"
 version = "0.1.0"
 edition = "2024"
 
+[[example]]
+name = "publisher"
+path = "examples/publisher.rs"
+
+[[example]]
+name = "subscriber"
+path = "examples/subscriber.rs"
+
 [dependencies]
 phf = { version = "0.13", features = ["macros"] }
 

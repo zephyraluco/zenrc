@@ -18,15 +18,19 @@ const WATCHED_ENV_VARS: &[&str] = &[
     "ROS_DISTRO",
 ];
 
+const MSG_INCLUDES_NAME: &str = "msg_includes.h";
+const INTROSPECTION_MAP_NAME: &str = "introspection_maps.rs";
+const RCL_BINDINGS_NAME: &str = "rcl_bindings.rs";
+
 fn main() {
     println!("正在生成绑定文件...");
     print_cargo_watches();
     print_cargo_ros_distro();
     let ros_msgs = collect_ros_msgs();
-    generate_includes(&ros_msgs);
-    generate_introspection_map(&PathBuf::from(env::var_os("OUT_DIR").unwrap()), &ros_msgs);
+    generate_includes(MSG_INCLUDES_NAME, &ros_msgs);
+    generate_introspection_map(INTROSPECTION_MAP_NAME, &ros_msgs);
     run_bindgen();
-    run_dynlink();
+    run_dynlink(&ros_msgs);
 }
 
 fn get_env_hash() -> String {
@@ -94,14 +98,11 @@ fn setup_bindgen_builder() -> bindgen::Builder {
             let dirs = e
                 .filter_map(|a| {
                     let path = a.unwrap().path();
-                    if path.is_dir() {
-                        Some(path)
-                    } else {
-                        None
-                    }
+                    if path.is_dir() { Some(path) } else { None }
                 })
                 .collect::<Vec<_>>();
 
+            // 设置 include 路径，支持双层 include（如 rcl/include/rcl 和 rcl/include/rcl/rcl）
             builder = dirs.iter().fold(builder, |builder, d| {
                 if let Some(leaf) = d.file_name() {
                     let double_include_path = Path::new(d).join(leaf);
@@ -171,23 +172,22 @@ fn print_cargo_link_search() {
 fn run_bindgen() {
     let env_hash = get_env_hash();
     let out_dir: PathBuf = env::var_os("OUT_DIR").unwrap().into();
-    // let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let bindgen_dir = out_dir.join(env_hash);
-    let cached_file = bindgen_dir.join("rcl_bindings.rs");
     let mark_file = bindgen_dir.join("done");
-    let target_file = out_dir.join("rcl_bindings.rs");
+    let target_file = out_dir.join(RCL_BINDINGS_NAME);
 
     if !mark_file.exists() {
-        eprintln!("Generate bindings file '{}'", cached_file.display());
+        eprintln!("Generate bindings file '{}'", target_file.display());
         gen_bindings(&target_file);
         touch(&mark_file);
     } else {
-        eprintln!("Use cached bindings file '{}'", cached_file.display());
+        eprintln!("using last generated: {}", target_file.display());
     }
 }
 
-fn run_dynlink() {
+fn run_dynlink(ros_msgs: &[RosMsg]) {
     print_cargo_link_search();
+    // rcl 链接路径
     println!("cargo:rustc-link-lib=dylib=rcl");
     println!("cargo:rustc-link-lib=dylib=rcl_logging_spdlog");
     println!("cargo:rustc-link-lib=dylib=rcl_yaml_param_parser");
@@ -196,17 +196,22 @@ fn run_dynlink() {
     println!("cargo:rustc-link-lib=dylib=rmw_implementation");
     println!("cargo:rustc-link-lib=dylib=rosidl_typesupport_c");
     println!("cargo:rustc-link-lib=dylib=rosidl_runtime_c");
+
+    // msg/srv/action 类型链接路径
+    print_msg_link_libs(ros_msgs);
 }
 
 fn gen_bindings(out_file: &Path) {
-let out_dir: PathBuf = env::var_os("OUT_DIR").unwrap().into();
-        let includes_file = out_dir.join("msg_includes.h");
-        let bindings = setup_bindgen_builder()
+    let out_dir: PathBuf = env::var_os("OUT_DIR").unwrap().into();
+    let includes_file = out_dir.join(MSG_INCLUDES_NAME);
+    let bindings = setup_bindgen_builder()
         .header("wrapper.hpp")
         .header(includes_file.to_str().unwrap())
+        // msg/srv/action 相关的函数和类型
         .allowlist_function(r"[\w_]*__(msg|srv|action)__[\w_]*__(create|destroy)")
         .allowlist_function(r"[\w_]*__(msg|srv|action)__[\w_]*__Sequence__(init|fini)")
         .allowlist_var(r"[\w_]*__(msg|srv|action)__[\w_]*__[\w_]*")
+        // rcl、rcutils、rmw、rosidl相关的函数和类型
         .allowlist_type("rcl_.*")
         .allowlist_type("rcutils_.*")
         .allowlist_type("rmw_.*")
