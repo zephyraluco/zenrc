@@ -21,6 +21,7 @@ const WATCHED_ENV_VARS: &[&str] = &[
 const MSG_INCLUDES_NAME: &str = "msg_includes.h";
 const INTROSPECTION_MAP_NAME: &str = "introspection_maps.rs";
 const RCL_BINDINGS_NAME: &str = "rcl_bindings.rs";
+const CONSTANTS_NAME: &str = "constants_map.rs";
 
 fn main() {
     println!("正在生成绑定文件...");
@@ -178,7 +179,8 @@ fn run_bindgen() {
 
     if !mark_file.exists() {
         eprintln!("Generate bindings file '{}'", target_file.display());
-        gen_bindings(&target_file);
+        let ros_msgs = collect_ros_msgs();
+        gen_bindings(&target_file, &bindgen_dir, &ros_msgs);
         touch(&mark_file);
     } else {
         eprintln!("using last generated: {}", target_file.display());
@@ -201,7 +203,7 @@ fn run_dynlink(ros_msgs: &[RosMsg]) {
     print_msg_link_libs(ros_msgs);
 }
 
-fn gen_bindings(out_file: &Path) {
+fn gen_bindings(out_file: &Path, bindgen_dir: &Path, ros_msgs: &[RosMsg]) {
     let out_dir: PathBuf = env::var_os("OUT_DIR").unwrap().into();
     let includes_file = out_dir.join(MSG_INCLUDES_NAME);
     let bindings = setup_bindgen_builder()
@@ -240,6 +242,10 @@ fn gen_bindings(out_file: &Path) {
     bindings
         .write_to_file(out_file)
         .expect("Couldn't write bindings!");
+
+    // 生成常量映射表
+    generate_constants(CONSTANTS_NAME, ros_msgs, &bindings);
+    
 }
 
 fn touch(path: &Path) {

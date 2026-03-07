@@ -1,12 +1,11 @@
 use rayon::prelude::*;
+use quote::quote;
 use regex::Regex;
 use std::{
-    env,
-    fs::{self, OpenOptions},
-    io::Write,
-    iter::chain,
-    path::{Path, PathBuf},
+    env, fs::{self, File, OpenOptions}, io::{BufWriter, Write}, iter::chain, mem, path::{Path, PathBuf}
 };
+use prettyplease;
+
 const SRV_SUFFICES: &[&str] = &["Request", "Response"];
 const ACTION_SUFFICES: &[&str] = &["Goal", "Result", "Feedback", "FeedbackMessage"];
 
@@ -276,4 +275,189 @@ pub fn print_msg_link_libs(ros_msgs: &[RosMsg]) {
         );
         println!("cargo:rustc-link-lib=dylib={}__rosidl_generator_c", module);
     }
+}
+
+/// 辅助模块，用于绕过 !Send 限制
+mod force_send_sync {
+    pub struct SendSync<T>(pub T);
+    unsafe impl<T> Send for SendSync<T> {}
+    unsafe impl<T> Sync for SendSync<T> {}
+}
+
+/// 将值包装为 SendSync，绕过 Send 限制
+unsafe fn force_send<T>(value: T) -> force_send_sync::SendSync<T> {
+    force_send_sync::SendSync(value)
+}
+
+/// 生成常量映射表
+/// 从 bindgen 生成的绑定文件中提取常量定义，并生成 phf map
+pub fn generate_constants(file_name: &str, msg_list: &[RosMsg], bindings: &bindgen::Bindings) {
+    let out_dir: PathBuf = env::var_os("OUT_DIR").unwrap().into();
+    let constants_file = out_dir.join(file_name);
+
+    // 将绑定转换为 token 流
+    let tokens: syn::File =
+        syn::parse_str(&bindings.to_string()).expect("Unable to parse generated bindings");
+
+    // 绕过 !Send 限制
+    let items: &[force_send_sync::SendSync<syn::Item>] =
+        unsafe { mem::transmute(tokens.items.as_slice()) };
+
+    /// 用于索引常量项的键
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct Key {
+        pub module: String,
+        pub prefix: String,
+        pub name: String,
+        /// 如果 prefix 是 "msg"，suffix 为 None；否则不为 None
+        pub suffix: Option<String>,
+    }
+
+    // 查找所有看起来像常量的项
+    let mut constants: Vec<_> = items
+        .par_iter()
+        .filter_map(|item| {
+            // 过滤非常量项
+            let syn::Item::Const(item) = &item.0 else {
+                return None;
+            };
+
+            // 过滤以 "__MAX_SIZE" 或 "__MAX_STRING_SIZE" 结尾的常量
+            let ident = item.ident.to_string();
+            if ident.ends_with("__MAX_SIZE") || ident.ends_with("__MAX_STRING_SIZE") {
+                return None;
+            }
+
+            // 创建常量的键
+            let (key, const_name) = {
+                let (module, remain) = ident.split_once("__")?;
+                let (prefix, remain) = remain.split_once("__")?;
+                let (name_and_suffix, const_name) = remain.split_once("__")?;
+                let (name, suffix) = match name_and_suffix.rsplit_once('_') {
+                    Some((name, suffix)) => (name, Some(suffix.to_string())),
+                    None => (name_and_suffix, None),
+                };
+
+                if let Some(suffix) = &suffix {
+                    if !SRV_SUFFICES.contains(&suffix.as_str())
+                        && !ACTION_SUFFICES.contains(&suffix.as_str())
+                    {
+                        return None;
+                    }
+                }
+
+                let key = Key {
+                    module: module.to_string(),
+                    prefix: prefix.to_string(),
+                    name: name.to_string(),
+                    suffix,
+                };
+
+                (key, const_name)
+            };
+
+            // 生成常量条目
+            let typ = &item.ty;
+            let entry = (const_name.to_string(), quote! { #typ }.to_string());
+            Some((key, entry))
+        })
+        .collect();
+
+    // 排序常量以支持后续的二分查找
+    constants.par_sort_unstable();
+
+    let mut entries: Vec<_> = msg_list
+        .par_iter()
+        .flat_map(|msg| {
+            // 为每个消息类型生成键
+
+            let RosMsg {
+                module,
+                prefix,
+                name,
+            } = msg;
+
+            match prefix.as_str() {
+                "msg" => vec![Key {
+                    module: module.to_string(),
+                    prefix: prefix.to_string(),
+                    name: name.to_string(),
+                    suffix: None,
+                }],
+                "srv" => SRV_SUFFICES
+                    .iter()
+                    .map(|suffix| Key {
+                        module: module.to_string(),
+                        prefix: prefix.to_string(),
+                        name: name.to_string(),
+                        suffix: Some(suffix.to_string()),
+                    })
+                    .collect(),
+                "action" => ACTION_SUFFICES
+                    .iter()
+                    .map(|suffix| Key {
+                        module: module.to_string(),
+                        prefix: prefix.to_string(),
+                        name: name.to_string(),
+                        suffix: Some(suffix.to_string()),
+                    })
+                    .collect(),
+                _ => unreachable!(),
+            }
+        })
+        .filter_map(|key| {
+            // 使用二分查找查找具有相同键的项
+            let range = {
+                let idx = constants.partition_point(|(other, _)| other < &key);
+                let len = constants
+                    .get(idx..)?
+                    .partition_point(|(other, _)| other == &key);
+                if len == 0 {
+                    return None;
+                }
+                idx..(idx + len)
+            };
+
+            let Key {
+                module,
+                prefix,
+                name,
+                suffix,
+            } = key;
+            let msg = match suffix {
+                Some(suffix) => format!("{module}__{prefix}__{name}_{suffix}"),
+                None => format!("{module}__{prefix}__{name}"),
+            };
+
+            Some((msg, &constants[range]))
+        })
+        .map(|(msg, msg_constants)| {
+            // 生成 map 条目
+            let consts = msg_constants
+                .iter()
+                .map(|(_, (const_name, typ))| quote! { (#const_name, #typ) });
+            let entry = quote! { #msg => &[ #(#consts),* ] };
+
+            // 绕过 !Send 限制
+            (msg, unsafe { force_send(entry) })
+        })
+        .collect();
+
+    // 按消息名称排序条目
+    entries.par_sort_by_cached_key(|(msg, _): &(String, _)| msg.to_string());
+    let entries = entries.into_iter().map(|(_, tokens)| tokens.0);
+
+    // 写入文件内容
+    let constants_map = quote! {
+        static CONSTANTS_MAP: phf::Map<&'static str, &[(&str, &str)]> = phf::phf_map! {
+            #(#entries),*
+        };
+    };
+    
+    // 格式化输出
+    let formatted = prettyplease::unparse(
+        &syn::parse_str::<syn::File>(&constants_map.to_string()).unwrap()
+    );
+    let mut writer = BufWriter::new(File::create(constants_file).unwrap());
+    writeln!(&mut writer, "{}", formatted).unwrap();
 }

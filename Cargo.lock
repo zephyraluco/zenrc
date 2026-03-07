@@ -1524,9 +1524,12 @@ dependencies = [
  "os_str_bytes",
  "phf",
  "phf_codegen",
+ "prettyplease",
+ "quote",
  "rayon",
  "regex",
  "sha2",
+ "syn",
 ]
 
 [[package]]
