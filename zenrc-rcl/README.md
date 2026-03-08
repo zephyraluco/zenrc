@@ -182,13 +182,32 @@ static UPPERCASE_AFTER: Regex = Regex::new(r"([a-z0-9])([A-Z])").unwrap();
 1. **消息定义头文件**: `{module}/{prefix}/{snake_name}.h`
 2. **类型反射头文件**: `{module}/{prefix}/detail/{snake_name}__rosidl_typesupport_introspection_c.h`
 
-#### 4.2 生成类型反射映射表 (`generate_introspection_map`)
+#### 4.2 生成类型反射和常量映射表 (`generate_introspection_map`)
 
 **输出文件**: `{OUT_DIR}/introspection_maps.rs`
 
-**目的**: 生成编译时完美哈希表（PHF），将消息类型名映射到其 introspection 函数。
+**目的**: 生成两个编译时完美哈希表（PHF）：
+1. 将消息类型名映射到其 introspection 函数
+2. 将消息类型名映射到其常量定义
 
-**映射规则**:
+**架构设计**:
+
+该函数采用模块化设计，分为三个层次：
+
+1. **`generate_introspection_map`** (主函数)
+   - 协调整体生成流程
+   - 管理文件 I/O
+   - 调用解析函数并格式化输出
+
+2. **`parse_functions`** (函数映射解析)
+   - 解析消息列表生成 introspection 函数映射
+   - 返回格式化的 Rust 代码字符串
+
+3. **`parse_constants`** (常量映射解析)
+   - 从 bindgen 生成的绑定中提取常量定义
+   - 返回格式化的 Rust 代码字符串
+
+**函数映射规则** (`parse_functions`):
 
 1. **消息类型 (msg)**: 生成单个映射条目
    ```rust
@@ -205,17 +224,46 @@ static UPPERCASE_AFTER: Regex = Regex::new(r"([a-z0-9])([A-Z])").unwrap();
    - 标准后缀: `Goal`, `Result`, `Feedback`, `FeedbackMessage`
    - 服务后缀: `SendGoal_Request`, `SendGoal_Response`, `GetResult_Request`, `GetResult_Response`
 
+**常量映射规则** (`parse_constants`):
+
+从 bindgen 生成的绑定中提取消息类型相关的常量定义：
+
+1. **常量识别**: 解析 bindgen 输出的 AST，查找符合命名模式的常量
+   - 格式: `{module}__{prefix}__{name}[_{suffix}]__{const_name}`
+   - 示例: `std_msgs__msg__String__CAPACITY`
+
+2. **常量过滤**: 排除不需要的常量
+   - 过滤 `__MAX_SIZE` 和 `__MAX_STRING_SIZE` 后缀
+   - 只保留与消息类型直接相关的常量
+
+3. **常量分组**: 按消息类型分组常量
+   - 使用二分查找高效匹配常量到消息类型
+   - 每个消息类型对应一个常量数组
+
 **生成代码示例**:
 ```rust
 // 自动生成的 introspection 函数映射表
 type IntrospectionFn = unsafe extern "C" fn() -> *const rosidl_message_type_support_t;
-pub static INTROSPECTION_MAP: phf::Map<&'static str, IntrospectionFn> = phf::phf_map! {
+static FUNCTIONS_MAP: phf::Map<&'static str, IntrospectionFn> = phf::phf_map! {
     "std_msgs__msg__String" => rosidl_typesupport_introspection_c__get_message_type_support_handle__std_msgs__msg__String as IntrospectionFn,
     // ... 更多映射条目
 };
+
+// 自动生成的常量映射表
+static CONSTANTS_MAP: phf::Map<&'static str, &[(&str, &str)]> = phf::phf_map! {
+    "std_msgs__msg__String" => &[
+        ("CAPACITY", "usize"),
+        // ... 更多常量
+    ],
+    // ... 更多消息类型
+};
 ```
 
-**性能优化**: 使用 `rayon` 并行处理消息列表，加速映射表生成。
+**性能优化**:
+- 使用 `rayon` 并行处理消息列表和常量解析
+- 使用 `par_sort_unstable` 并行排序
+- 使用 `force_send_sync` 模块绕过 `!Send` 限制，支持并行处理 `quote!` 生成的 token
+- 使用 `prettyplease` 格式化输出代码，提高可读性
 
 ---
 
@@ -397,7 +445,223 @@ println!("cargo:rustc-link-lib=dylib={module}__rosidl_generator_c");
 
 ---
 
-## 8. 工具函数
+## 8. msg_gen.rs 模块架构
+
+### 8.1 模块概述
+
+`msg_gen.rs` 是代码生成的核心模块，负责 ROS2 消息类型的发现、解析和代码生成。
+
+### 8.2 核心数据结构
+
+#### RosMsg 结构体
+```rust
+#[derive(Debug, PartialEq, PartialOrd, Eq, Ord)]
+pub struct RosMsg {
+    pub module: String,  // 包名，如 "std_msgs"
+    pub prefix: String,  // 类型前缀: "msg", "srv", "action"
+    pub name: String,    // 类型名，如 "String"
+}
+```
+
+**特性**:
+- 实现了完整的排序 trait，支持高效排序和二分查找
+- 使用 `par_sort_unstable` 进行并行排序
+
+### 8.3 辅助模块
+
+#### force_send_sync 模块
+```rust
+mod force_send_sync {
+    pub struct SendSync<T>(pub T);
+    unsafe impl<T> Send for SendSync<T> {}
+    unsafe impl<T> Sync for SendSync<T> {}
+}
+```
+
+**目的**: 绕过 `quote!` 宏生成的 `TokenStream` 的 `!Send` 限制
+
+**使用场景**:
+- 在并行处理中使用 `quote!` 宏
+- 将 token stream 存储在 `Vec` 中进行并行操作
+- 通过 `unsafe` 包装器临时绕过 Send 限制
+
+**安全性**: 虽然使用了 `unsafe`，但在单线程上下文中是安全的，因为 token stream 本身是不可变的。
+
+### 8.4 公共 API
+
+#### `collect_ros_msgs() -> Vec<RosMsg>`
+收集系统中所有已安装的 ROS2 消息类型。
+
+**流程**:
+1. 从环境变量收集搜索路径
+2. 扫描资源索引目录
+3. 解析消息定义文件
+4. 并行排序和过滤
+
+#### `camel_to_snake(s: &str) -> String`
+将 CamelCase 转换为 snake_case。
+
+**示例**:
+- `StringMessage` → `string_message`
+- `HTTPResponse` → `http_response`
+
+#### `generate_includes(file_name: &str, msgs: &[RosMsg])`
+生成 C 头文件包含列表。
+
+**输出**: `{OUT_DIR}/msg_includes.h`
+
+#### `print_msg_link_libs(ros_msgs: &[RosMsg])`
+为所有消息模块生成 Cargo 链接库指令。
+
+**输出**: 为每个包生成 3 个链接指令
+- `{module}__rosidl_typesupport_c`
+- `{module}__rosidl_typesupport_introspection_c`
+- `{module}__rosidl_generator_c`
+
+#### `generate_introspection_map(file_name: &str, msg_list: &[RosMsg], bindings: &bindgen::Bindings)`
+生成 introspection 函数和常量映射表。
+
+**输出**: `{OUT_DIR}/introspection_maps.rs`（包含两个 PHF map）
+
+### 8.5 内部函数
+
+#### `parse_functions(msg_list: &[RosMsg]) -> String`
+解析消息列表生成 introspection 函数映射。
+
+**实现细节**:
+1. 使用 `par_iter()` 并行处理消息列表
+2. 使用 `flat_map` 展开不同类型的映射条目
+3. 使用 `quote!` 宏生成 token stream
+4. 使用 `force_send` 包装器支持并行处理
+5. 使用 `prettyplease` 格式化输出
+
+**生成的映射表**:
+```rust
+static FUNCTIONS_MAP: phf::Map<&'static str, IntrospectionFn> = phf::phf_map! {
+    "std_msgs__msg__String" => rosidl_typesupport_introspection_c__get_message_type_support_handle__std_msgs__msg__String as IntrospectionFn,
+    // ...
+};
+```
+
+#### `parse_constants(msg_list: &[RosMsg], bindings: &bindgen::Bindings) -> String`
+从 bindgen 生成的绑定中提取常量定义。
+
+**实现细节**:
+
+1. **AST 解析**:
+   ```rust
+   let tokens: syn::File = syn::parse_str(&bindings.to_string())?;
+   ```
+   使用 `syn` 解析 bindgen 输出的 Rust 代码
+
+2. **常量过滤**:
+   - 只保留 `syn::Item::Const` 类型的项
+   - 过滤 `__MAX_SIZE` 和 `__MAX_STRING_SIZE` 后缀
+   - 验证 suffix 是否为有效的服务或动作后缀
+
+3. **常量命名解析**:
+   ```
+   格式: {module}__{prefix}__{name}[_{suffix}]__{const_name}
+   示例: std_msgs__msg__String__CAPACITY
+   ```
+
+4. **Key 结构体**:
+   ```rust
+   struct Key {
+       pub module: String,
+       pub prefix: String,
+       pub name: String,
+       pub suffix: Option<String>,
+   }
+   ```
+   用于索引和匹配常量到消息类型
+
+5. **二分查找匹配**:
+   - 对常量列表按 Key 排序
+   - 使用 `partition_point` 进行二分查找
+   - 高效匹配常量到对应的消息类型
+
+6. **并行处理**:
+   - 使用 `par_iter()` 并行过滤常量
+   - 使用 `par_sort_unstable()` 并行排序
+   - 使用 `par_sort_by_cached_key()` 优化排序性能
+
+**生成的映射表**:
+```rust
+static CONSTANTS_MAP: phf::Map<&'static str, &[(&str, &str)]> = phf::phf_map! {
+    "std_msgs__msg__String" => &[
+        ("CAPACITY", "usize"),
+        // ...
+    ],
+    // ...
+};
+```
+
+### 8.6 性能优化技术
+
+#### 并行处理
+- 使用 `rayon` 的 `par_iter()` 并行迭代
+- 使用 `par_sort_unstable()` 并行排序
+- 使用 `par_sort_by_cached_key()` 缓存排序键
+
+#### 内存优化
+- 使用 `mem::transmute` 绕过 `!Send` 限制（在安全上下文中）
+- 避免不必要的克隆和分配
+- 使用引用而非所有权传递
+
+#### 算法优化
+- 使用二分查找匹配常量（O(log n)）
+- 使用 `partition_point` 高效查找范围
+- 使用 `HashSet` 去重模块名
+
+### 8.7 代码生成流程
+
+```
+collect_ros_msgs()
+    ↓
+generate_includes()  →  msg_includes.h
+    ↓
+generate_introspection_map()
+    ├─> parse_functions()
+    │   ├─> 并行处理消息列表
+    │   ├─> 生成函数映射 token
+    │   └─> 格式化输出
+    │
+    ├─> parse_constants()
+    │   ├─> 解析 bindgen AST
+    │   ├─> 并行过滤常量
+    │   ├─> 二分查找匹配
+    │   └─> 格式化输出
+    │
+    └─> 写入 introspection_maps.rs
+```
+
+### 8.8 常量提取示例
+
+**输入** (bindgen 输出):
+```rust
+pub const std_msgs__msg__String__CAPACITY: usize = 256;
+pub const std_msgs__msg__String__MAX_SIZE: usize = 1024;
+pub const geometry_msgs__msg__Point__X_OFFSET: usize = 0;
+```
+
+**处理流程**:
+1. 解析为 AST
+2. 过滤掉 `MAX_SIZE` 后缀的常量
+3. 提取 `CAPACITY` 和 `X_OFFSET`
+4. 按消息类型分组
+
+**输出** (生成的映射表):
+```rust
+static CONSTANTS_MAP: phf::Map<&'static str, &[(&str, &str)]> = phf::phf_map! {
+    "std_msgs__msg__String" => &[("CAPACITY", "usize")],
+    "geometry_msgs__msg__Point" => &[("X_OFFSET", "usize")],
+};
+```
+
+---
+
+## 9. 工具函数
 
 ### `touch(path: &Path)`
 
@@ -428,9 +692,11 @@ fn touch(path: &Path) {
 - `bindgen` (0.72) - C/C++ FFI 绑定生成器
 - `os_str_bytes` (7.1) - 处理非 UTF-8 路径
 - `sha2` (0.10) - SHA256 哈希计算
-- `regex` (1.12) - 正则表达式处理
-- `phf_codegen` (0.13) - 编译时完美哈希表生成
-- `rayon` (1.11) - 并行迭代器
+- `regex` (1.12) - 正则表达式处理（命名转换）
+- `rayon` (1.11) - 并行迭代器（加速代码生成）
+- `quote` (1.0) - Rust 代码生成宏
+- `syn` (2.0) - Rust 语法解析（解析 bindgen 输出）
+- `prettyplease` (0.2) - Rust 代码格式化
 
 ### 运行时依赖 (dependencies)
 - `phf` (0.13, features: ["macros"]) - 编译时完美哈希表
@@ -473,13 +739,22 @@ fn touch(path: &Path) {
   │   ├─> 为每个消息生成 #include 语句
   │   └─> 包含消息定义和 introspection 头文件
   │
-  ├─> 5. 生成类型反射映射表 (generate_introspection_map)
-  │   ├─> 并行处理消息列表 (rayon)
-  │   ├─> 为 msg 生成 1 个映射条目
-  │   ├─> 为 srv 生成 2 个映射条目
-  │   ├─> 为 action 生成 8 个映射条目
-  │   ├─> 使用 phf_codegen 生成完美哈希表
-  │   └─> 写入 introspection_maps.rs
+  ├─> 5. 生成类型反射和常量映射表 (generate_introspection_map)
+  │   ├─> 解析函数映射 (parse_functions)
+  │   │   ├─> 并行处理消息列表 (rayon)
+  │   │   ├─> 为 msg 生成 1 个映射条目
+  │   │   ├─> 为 srv 生成 2 个映射条目
+  │   │   ├─> 为 action 生成 8 个映射条目
+  │   │   ├─> 使用 quote! 宏生成 token stream
+  │   │   └─> 使用 prettyplease 格式化代码
+  │   ├─> 解析常量映射 (parse_constants)
+  │   │   ├─> 解析 bindgen 输出的 AST (syn)
+  │   │   ├─> 并行过滤常量项 (rayon)
+  │   │   ├─> 按消息类型分组常量
+  │   │   ├─> 使用二分查找匹配常量
+  │   │   ├─> 使用 quote! 宏生成 token stream
+  │   │   └─> 使用 prettyplease 格式化代码
+  │   └─> 写入 introspection_maps.rs（包含两个映射表）
   │
   ├─> 6. 生成 FFI 绑定 (run_bindgen)
   │   ├─> 计算环境哈希 (SHA256)
