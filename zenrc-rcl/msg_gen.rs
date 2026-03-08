@@ -1,15 +1,18 @@
-use rayon::prelude::*;
-use quote::quote;
-use regex::Regex;
-use std::{
-    env, fs::{self, File, OpenOptions}, io::{BufWriter, Write}, iter::chain, mem, path::{Path, PathBuf}
-};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::iter::chain;
+use std::path::{Path, PathBuf};
+use std::{env, mem};
+
 use prettyplease;
+use quote::{format_ident, quote};
+use rayon::prelude::*;
+use regex::Regex;
 
 const SRV_SUFFICES: &[&str] = &["Request", "Response"];
 const ACTION_SUFFICES: &[&str] = &["Goal", "Result", "Feedback", "FeedbackMessage"];
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, PartialOrd, Eq, Ord)]
 pub struct RosMsg {
     pub module: String, // e.g. std_msgs
     pub prefix: String, // e.g. "msg" or "srv"
@@ -79,12 +82,7 @@ pub fn collect_ros_msgs() -> Vec<RosMsg> {
         }
     }
     // 对消息列表进行排序，确保生成的代码顺序稳定
-    msgs.sort_by(|a, b| {
-        a.module
-            .cmp(&b.module)
-            .then(a.prefix.cmp(&b.prefix))
-            .then(a.name.cmp(&b.name))
-    });
+    msgs.par_sort_unstable();
     // 应用过滤器（如果设置了 IDL_PACKAGE_FILTER）
     if let Ok(filter) = env::var("IDL_PACKAGE_FILTER") {
         let filters: Vec<&str> = filter.split(',').map(|s| s.trim()).collect();
@@ -147,12 +145,42 @@ pub fn generate_includes(file_name: &str, msgs: &[RosMsg]) {
     eprintln!("Generated includes file: {}", includes_file.display());
 }
 
-/// 生成 introspection 函数映射表
-/// 根据消息列表生成编译时完美哈希表
-pub fn generate_introspection_map(file_name: &str, msg_list: &[RosMsg]) {
-    let out_dir: PathBuf = env::var_os("OUT_DIR").unwrap().into();
-    let map_file = out_dir.join(file_name);
+/// 为所有消息模块生成 Cargo 链接库指令
+pub fn print_msg_link_libs(ros_msgs: &[RosMsg]) {
+    let mut modules_vec: Vec<String> = ros_msgs
+        .iter()
+        .map(|m| m.module.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    modules_vec.sort();
 
+    for module in modules_vec {
+        println!(
+            "cargo:rustc-link-lib=dylib={}__rosidl_typesupport_c",
+            module
+        );
+        println!(
+            "cargo:rustc-link-lib=dylib={}__rosidl_typesupport_introspection_c",
+            module
+        );
+        println!("cargo:rustc-link-lib=dylib={}__rosidl_generator_c", module);
+    }
+}
+/// 辅助模块，用于绕过 !Send 限制
+mod force_send_sync {
+    pub struct SendSync<T>(pub T);
+    unsafe impl<T> Send for SendSync<T> {}
+    unsafe impl<T> Sync for SendSync<T> {}
+}
+
+/// 将值包装为 SendSync，绕过 Send 限制
+unsafe fn force_send<T>(value: T) -> force_send_sync::SendSync<T> {
+    force_send_sync::SendSync(value)
+}
+
+/// 从消息列表生成 introspection 函数映射的 token stream
+fn parse_functions(msg_list: &[RosMsg]) -> String {
     // 收集所有映射条目（使用并行迭代器）
     let entries: Vec<_> = msg_list
         .par_iter()
@@ -219,90 +247,27 @@ pub fn generate_introspection_map(file_name: &str, msg_list: &[RosMsg]) {
                 }
             }
         })
-        .collect();
+        .map(|(key, func_name)| {
+        let func_ident = format_ident!("{func_name}");
+        let entry = quote! { #key => #func_ident as IntrospectionFn };
+        (key, unsafe { force_send(entry) })
+    })
+    .collect();
+    let entries = entries.into_iter().map(|(_, tokens)| tokens.0);
 
-    // 生成映射表文件
-    let mut file = OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&map_file)
-        .unwrap_or_else(|_| panic!("Unable to create file '{}'", map_file.display()));
-
-    writeln!(file, "// 自动生成的 introspection 函数映射表").unwrap();
-    writeln!(
-        file,
-        "type IntrospectionFn = unsafe extern \"C\" fn() -> *const rosidl_message_type_support_t;"
-    )
-    .unwrap();
-    writeln!(
-        file,
-        "pub static INTROSPECTION_MAP: phf::Map<&'static str, IntrospectionFn> = phf::phf_map! {{"
-    )
-    .unwrap();
-
-    for (key, func_name) in &entries {
-        writeln!(file, "    \"{}\" => {} as IntrospectionFn,", key, func_name).unwrap();
-    }
-
-    writeln!(file, "}};").unwrap();
-
-    eprintln!(
-        "Generated introspection map with {} entries: {}",
-        entries.len(),
-        map_file.display()
-    );
+    // 生成函数映射表
+    let functions_map = quote! {
+        // 自动生成的 introspection 函数映射表
+        type IntrospectionFn = unsafe extern "C" fn() -> *const rosidl_message_type_support_t;
+        static FUNCTIONS_MAP: phf::Map<&'static str, IntrospectionFn> = phf::phf_map! {
+            #(#entries),*
+        };
+    };
+    prettyplease::unparse(&syn::parse_str::<syn::File>(&functions_map.to_string()).unwrap())
 }
 
-/// 为所有消息模块生成 Cargo 链接库指令
-pub fn print_msg_link_libs(ros_msgs: &[RosMsg]) {
-    let mut modules_vec: Vec<String> = ros_msgs
-        .iter()
-        .map(|m| m.module.clone())
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-    modules_vec.sort();
-
-    for module in modules_vec {
-        println!(
-            "cargo:rustc-link-lib=dylib={}__rosidl_typesupport_c",
-            module
-        );
-        println!(
-            "cargo:rustc-link-lib=dylib={}__rosidl_typesupport_introspection_c",
-            module
-        );
-        println!("cargo:rustc-link-lib=dylib={}__rosidl_generator_c", module);
-    }
-}
-
-/// 辅助模块，用于绕过 !Send 限制
-mod force_send_sync {
-    pub struct SendSync<T>(pub T);
-    unsafe impl<T> Send for SendSync<T> {}
-    unsafe impl<T> Sync for SendSync<T> {}
-}
-
-/// 将值包装为 SendSync，绕过 Send 限制
-unsafe fn force_send<T>(value: T) -> force_send_sync::SendSync<T> {
-    force_send_sync::SendSync(value)
-}
-
-/// 生成常量映射表
-/// 从 bindgen 生成的绑定文件中提取常量定义，并生成 phf map
-pub fn generate_constants(file_name: &str, msg_list: &[RosMsg], bindings: &bindgen::Bindings) {
-    let out_dir: PathBuf = env::var_os("OUT_DIR").unwrap().into();
-    let constants_file = out_dir.join(file_name);
-
-    // 将绑定转换为 token 流
-    let tokens: syn::File =
-        syn::parse_str(&bindings.to_string()).expect("Unable to parse generated bindings");
-
-    // 绕过 !Send 限制
-    let items: &[force_send_sync::SendSync<syn::Item>] =
-        unsafe { mem::transmute(tokens.items.as_slice()) };
-
+/// 从 bindgen 生成的绑定中解析常量并生成 phf map 条目
+fn parse_constants(msg_list: &[RosMsg], bindings: &bindgen::Bindings) -> String {
     /// 用于索引常量项的键
     #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
     struct Key {
@@ -312,6 +277,14 @@ pub fn generate_constants(file_name: &str, msg_list: &[RosMsg], bindings: &bindg
         /// 如果 prefix 是 "msg"，suffix 为 None；否则不为 None
         pub suffix: Option<String>,
     }
+
+    // 将绑定转换为 token 流
+    let tokens: syn::File =
+        syn::parse_str(&bindings.to_string()).expect("Unable to parse generated bindings");
+
+    // 绕过 !Send 限制
+    let items: &[force_send_sync::SendSync<syn::Item>] =
+        unsafe { mem::transmute(tokens.items.as_slice()) };
 
     // 查找所有看起来像常量的项
     let mut constants: Vec<_> = items
@@ -447,17 +420,40 @@ pub fn generate_constants(file_name: &str, msg_list: &[RosMsg], bindings: &bindg
     entries.par_sort_by_cached_key(|(msg, _): &(String, _)| msg.to_string());
     let entries = entries.into_iter().map(|(_, tokens)| tokens.0);
 
-    // 写入文件内容
+    // 生成常量映射表
     let constants_map = quote! {
         static CONSTANTS_MAP: phf::Map<&'static str, &[(&str, &str)]> = phf::phf_map! {
             #(#entries),*
         };
     };
-    
-    // 格式化输出
-    let formatted = prettyplease::unparse(
-        &syn::parse_str::<syn::File>(&constants_map.to_string()).unwrap()
-    );
-    let mut writer = BufWriter::new(File::create(constants_file).unwrap());
-    writeln!(&mut writer, "{}", formatted).unwrap();
+    prettyplease::unparse(&syn::parse_str::<syn::File>(&constants_map.to_string()).unwrap())
+}
+
+/// 生成 introspection 函数映射表和常量映射表
+/// 根据消息列表生成编译时完美哈希表
+pub fn generate_introspection_map(
+    file_name: &str,
+    msg_list: &[RosMsg],
+    bindings: &bindgen::Bindings,
+) {
+    let out_dir: PathBuf = env::var_os("OUT_DIR").unwrap().into();
+    let map_file = out_dir.join(file_name);
+
+    // 生成映射表文件
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&map_file)
+        .unwrap_or_else(|_| panic!("Unable to create file '{}'", map_file.display()));
+
+    writeln!(file, "// 自动生成的 introspection 函数映射表").unwrap();
+
+    // 生成函数映射表
+    let formatted = parse_functions(msg_list);
+    writeln!(file, "{}", formatted).unwrap();
+
+    // 生成常量映射表
+    let formatted = parse_constants(msg_list, bindings);
+    writeln!(file, "{}", formatted).unwrap();
 }
