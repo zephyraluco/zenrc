@@ -1525,6 +1525,7 @@ dependencies = [
  "phf",
  "phf_codegen",
  "prettyplease",
+ "proc-macro2",
  "quote",
  "rayon",
  "regex",

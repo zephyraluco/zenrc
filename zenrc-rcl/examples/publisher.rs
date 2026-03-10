@@ -60,7 +60,7 @@ fn main() {
             msg.data.data = allocator.allocate.unwrap()(
                 c_str.as_bytes_with_nul().len(),
                 allocator.state,
-            ) as *mut u8;
+            ) as *mut std::os::raw::c_char;
             msg.data.size = c_str.as_bytes().len();
             msg.data.capacity = c_str.as_bytes_with_nul().len();
 

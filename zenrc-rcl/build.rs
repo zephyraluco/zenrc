@@ -233,7 +233,7 @@ fn gen_bindings(out_file: &Path, ros_msgs: &[RosMsg]) {
         .merge_extern_blocks(true)
         .derive_partialeq(true)
         .derive_copy(true)
-        .generate_comments(false)
+        .generate_comments(true)
         .generate()
         .expect("Unable to generate bindings");
 

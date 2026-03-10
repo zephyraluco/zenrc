@@ -13,6 +13,9 @@ path = "examples/subscriber.rs"
 
 [dependencies]
 phf = { version = "0.13", features = ["macros"] }
+syn = "2.0"
+quote = "1.0"
+proc-macro2 = "1.0"
 
 [build-dependencies]
 bindgen = "0.72"

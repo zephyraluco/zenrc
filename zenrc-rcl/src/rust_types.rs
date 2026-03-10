@@ -1,0 +1,172 @@
+#![allow(non_upper_case_globals)]
+#![allow(non_camel_case_types)]
+#![allow(non_snake_case)]
+
+use core::slice;
+use std::{ffi::CStr, mem};
+use crate::{FUNCTIONS_MAP, rosidl_message_type_support_t, rosidl_typesupport_introspection_c__MessageMember, rosidl_typesupport_introspection_c__MessageMembers, rosidl_typesupport_introspection_c_field_types::{self, *}};
+
+use quote::format_ident;
+
+
+/// 解析类型支持句柄中的成员信息
+struct Introspection<'a> {
+    pub module: &'a str,
+    pub prefix: &'a str,
+    pub name: &'a str,
+    pub members: &'a [rosidl_typesupport_introspection_c__MessageMember],
+}
+impl<'a> Introspection<'a> {
+    pub fn name(&self) -> String {
+        format!("{}__{}__{}", self.module, self.prefix, self.name)
+    }
+}
+
+/// 包装类型支持句柄
+#[repr(transparent)]
+pub struct TypeSupport(rosidl_message_type_support_t);
+impl TypeSupport {
+    pub unsafe fn from_ptr(ptr: *const rosidl_message_type_support_t) -> Self {
+        TypeSupport(*ptr)
+    }
+
+    // pub unsafe fn introspection(&self) -> Introspection {
+    //     let type_support_members = self.0.data as *const rosidl_typesupport_introspection_c__MessageMembers;
+    //     let namespace = CStr::from_ptr((*type_support_members).message_namespace_).to_str().unwrap();
+    //     let name = CStr::from_ptr((*type_support_members).message_name_).to_str().unwrap();
+    //     let (module, prefix) = namespace.split_once("__").expect("Invalid namespace format");
+    //     let member_slice = slice::from_raw_parts((*type_support_members).members_, (*type_support_members).member_count_ as usize);
+    //     Introspection { module, prefix, name, members: member_slice }
+    // }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemberType {
+    Bool,
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+    //? ROS2 中没有直接对应的 128 位无符号整数类型，但我们可以将其映射到 Rust 的 `u128` 类型
+    U128,
+    F32,
+    F64,
+    Char,
+    WChar,
+    String,
+    WString,
+    Message,
+}
+
+impl From<rosidl_typesupport_introspection_c_field_types> for MemberType {
+    fn from(value: rosidl_typesupport_introspection_c_field_types) -> Self {
+        match value {
+            rosidl_typesupport_introspection_c__ROS_TYPE_BOOLEAN => MemberType::Bool,
+            rosidl_typesupport_introspection_c__ROS_TYPE_INT8 => MemberType::I8,
+            rosidl_typesupport_introspection_c__ROS_TYPE_INT16 => MemberType::I16,
+            rosidl_typesupport_introspection_c__ROS_TYPE_INT32 => MemberType::I32,
+            rosidl_typesupport_introspection_c__ROS_TYPE_INT64 => MemberType::I64,
+            rosidl_typesupport_introspection_c__ROS_TYPE_UINT8 | rosidl_typesupport_introspection_c__ROS_TYPE_OCTET => MemberType::U8,
+            rosidl_typesupport_introspection_c__ROS_TYPE_UINT16 => MemberType::U16,
+            rosidl_typesupport_introspection_c__ROS_TYPE_UINT32 => MemberType::U32,
+            rosidl_typesupport_introspection_c__ROS_TYPE_UINT64 => MemberType::U64,
+            rosidl_typesupport_introspection_c__ROS_TYPE_LONG_DOUBLE => MemberType::U128,
+            rosidl_typesupport_introspection_c__ROS_TYPE_FLOAT => MemberType::F32,
+            rosidl_typesupport_introspection_c__ROS_TYPE_DOUBLE => MemberType::F64,
+            rosidl_typesupport_introspection_c__ROS_TYPE_CHAR => MemberType::Char,
+            rosidl_typesupport_introspection_c__ROS_TYPE_WCHAR => MemberType::WChar,
+            rosidl_typesupport_introspection_c__ROS_TYPE_STRING => MemberType::String,
+            rosidl_typesupport_introspection_c__ROS_TYPE_WSTRING => MemberType::WString,
+            rosidl_typesupport_introspection_c__ROS_TYPE_MESSAGE => MemberType::Message,
+            _ => panic!("Unsupported ROS type: {:?}", value),
+        }
+    }
+}
+
+impl From<MemberType> for rosidl_typesupport_introspection_c_field_types {
+    fn from(value: MemberType) -> Self {
+        match value {
+            MemberType::Bool => rosidl_typesupport_introspection_c__ROS_TYPE_BOOLEAN,
+            MemberType::I8 => rosidl_typesupport_introspection_c__ROS_TYPE_INT8,
+            MemberType::I16 => rosidl_typesupport_introspection_c__ROS_TYPE_INT16,
+            MemberType::I32 => rosidl_typesupport_introspection_c__ROS_TYPE_INT32,
+            MemberType::I64 => rosidl_typesupport_introspection_c__ROS_TYPE_INT64,
+            MemberType::U8 => rosidl_typesupport_introspection_c__ROS_TYPE_UINT8,
+            MemberType::U16 => rosidl_typesupport_introspection_c__ROS_TYPE_UINT16,
+            MemberType::U32 => rosidl_typesupport_introspection_c__ROS_TYPE_UINT32,
+            MemberType::U64 => rosidl_typesupport_introspection_c__ROS_TYPE_UINT64,
+            MemberType::U128 => rosidl_typesupport_introspection_c__ROS_TYPE_LONG_DOUBLE,
+            MemberType::F32 => rosidl_typesupport_introspection_c__ROS_TYPE_FLOAT,
+            MemberType::F64 => rosidl_typesupport_introspection_c__ROS_TYPE_DOUBLE,
+            MemberType::Char => rosidl_typesupport_introspection_c__ROS_TYPE_CHAR,
+            MemberType::WChar => rosidl_typesupport_introspection_c__ROS_TYPE_WCHAR,
+            MemberType::String => rosidl_typesupport_introspection_c__ROS_TYPE_STRING,
+            MemberType::WString => rosidl_typesupport_introspection_c__ROS_TYPE_WSTRING,
+            MemberType::Message => rosidl_typesupport_introspection_c__ROS_TYPE_MESSAGE,
+        }
+    }
+}
+
+#[repr(transparent)]
+pub struct MessageMember(rosidl_typesupport_introspection_c__MessageMember);
+
+impl MessageMember {
+    pub fn name(&self) -> &str {
+        unsafe { CStr::from_ptr(self.0.name_).to_str().unwrap() }
+    }
+
+    pub fn type_id(&self) -> MemberType {
+        MemberType::from(self.0.type_id_)
+    }
+
+    pub fn string_upper_bound(&self) -> Option<usize> {
+        if self.type_id() ==  MemberType::String {
+            Some(self.0.string_upper_bound_ as usize)
+        } else {
+            None
+        }
+    }
+
+    pub fn array_size(&self) -> usize {
+        self.0.array_size_ as usize
+    }
+
+    
+}
+
+
+/// 获取消息类型支持句柄并解析成员信息
+unsafe fn get_message_type_support_handle<'a>(ptr: *const rosidl_message_type_support_t) -> (String,&'a [rosidl_typesupport_introspection_c__MessageMember]) {
+    let type_support_members = (*ptr).data as *const rosidl_typesupport_introspection_c__MessageMembers;
+    let namespace = CStr::from_ptr((*type_support_members).message_namespace_).to_str().unwrap();
+    let name = CStr::from_ptr((*type_support_members).message_name_).to_str().unwrap();
+    let (module, prefix) = namespace.split_once("__").expect("Invalid namespace format");
+    let c_struct = format!("{module}__{prefix}__{name}");
+    let member_slice = slice::from_raw_parts((*type_support_members).members_, (*type_support_members).member_count_ as usize);
+    (c_struct, member_slice)
+}
+
+pub fn generate_rust_msg(module: &str, prefix: &str, name: &str) -> proc_macro2::TokenStream {
+    let tokens = proc_macro2::TokenStream::new();
+    let key = format!("{}__{}__{}", module, prefix, name);
+    let function = FUNCTIONS_MAP.get(key.as_str()).expect("Message not found");
+    
+    let ts_ptr = unsafe { function() };
+    let (c_struct, c_members) = unsafe { get_message_type_support_handle(ts_ptr) };
+    
+    //? 这里可以使用 `c_struct` 来验证类型支持句柄的结构是否正确
+    assert!(format!("{}__{}__{}", module, prefix, name) == c_struct, "Type support handle does not match expected structure name");
+
+    //?  暂时仅生成msg
+    if prefix != "msg" {
+        panic!("Only message types are supported for now");
+    }
+    let name = format_ident!("{name}");
+    let c_struct_ident = format_ident!("{c_struct}");
+
+    tokens
+}
