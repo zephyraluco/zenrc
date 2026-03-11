@@ -3,7 +3,7 @@
 #![allow(non_snake_case)]
 
 use core::slice;
-use std::{ffi::CStr, mem};
+use std::ffi::CStr;
 use crate::{FUNCTIONS_MAP, rosidl_message_type_support_t, rosidl_typesupport_introspection_c__MessageMember, rosidl_typesupport_introspection_c__MessageMembers, rosidl_typesupport_introspection_c_field_types::{self, *}};
 
 use quote::format_ident;
@@ -62,6 +62,30 @@ pub enum MemberType {
     Message,
 }
 
+impl MemberType {
+    pub fn from_type_id(id: u8) -> Option<Self> {
+        Some(match id {
+            1 => Self::F32,
+            2 => Self::F64,
+            3 => Self::U128,
+            4 => Self::Char,
+            5 => Self::WChar,
+            6 => Self::Bool,
+            7 | 8 => Self::U8,
+            9 => Self::I8,
+            10 => Self::U16,
+            11 => Self::I16,
+            12 => Self::U32,
+            13 => Self::I32,
+            14 => Self::U64,
+            15 => Self::I64,
+            16 => Self::String,
+            17 => Self::WString,
+            18 => Self::Message,
+            _ => return None,
+        })
+    }
+}
 impl From<rosidl_typesupport_introspection_c_field_types> for MemberType {
     fn from(value: rosidl_typesupport_introspection_c_field_types) -> Self {
         match value {
@@ -82,14 +106,13 @@ impl From<rosidl_typesupport_introspection_c_field_types> for MemberType {
             rosidl_typesupport_introspection_c__ROS_TYPE_STRING => MemberType::String,
             rosidl_typesupport_introspection_c__ROS_TYPE_WSTRING => MemberType::WString,
             rosidl_typesupport_introspection_c__ROS_TYPE_MESSAGE => MemberType::Message,
-            _ => panic!("Unsupported ROS type: {:?}", value),
         }
     }
 }
 
-impl From<MemberType> for rosidl_typesupport_introspection_c_field_types {
-    fn from(value: MemberType) -> Self {
-        match value {
+impl Into<rosidl_typesupport_introspection_c_field_types> for MemberType {
+    fn into(self) -> rosidl_typesupport_introspection_c_field_types {
+        match self {
             MemberType::Bool => rosidl_typesupport_introspection_c__ROS_TYPE_BOOLEAN,
             MemberType::I8 => rosidl_typesupport_introspection_c__ROS_TYPE_INT8,
             MemberType::I16 => rosidl_typesupport_introspection_c__ROS_TYPE_INT16,
@@ -111,16 +134,18 @@ impl From<MemberType> for rosidl_typesupport_introspection_c_field_types {
     }
 }
 
+/// rosidl_typesupport_introspection_c__MessageMember 的安全包装类
 #[repr(transparent)]
 pub struct MessageMember(rosidl_typesupport_introspection_c__MessageMember);
 
 impl MessageMember {
+    /// 成员名称
     pub fn name(&self) -> &str {
         unsafe { CStr::from_ptr(self.0.name_).to_str().unwrap() }
     }
 
     pub fn type_id(&self) -> MemberType {
-        MemberType::from(self.0.type_id_)
+        MemberType::from_type_id(self.0.type_id_).unwrap()
     }
 
     pub fn string_upper_bound(&self) -> Option<usize> {
@@ -131,11 +156,27 @@ impl MessageMember {
         }
     }
 
-    pub fn array_size(&self) -> usize {
-        self.0.array_size_ as usize
+    pub fn is_array(&self) -> bool {
+        self.0.is_array_
     }
 
-    
+    pub fn array_size(&self) -> Option<usize> {
+        if self.0.is_array_ {
+            Some(self.0.array_size_)
+        } else {
+            None
+        }
+    }
+
+    /// 是否有最大长度限制
+    pub fn is_upper_bound(&self) -> bool {
+        self.0.is_upper_bound_
+    }
+
+    /// 字节偏移
+    pub fn offset(&self) -> usize {
+        self.0.offset_ as usize
+    }
 }
 
 
