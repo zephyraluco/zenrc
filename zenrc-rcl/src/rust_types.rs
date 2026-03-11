@@ -3,14 +3,14 @@
 #![allow(non_snake_case)]
 
 use core::slice;
-use std::ffi::CStr;
-use crate::{FUNCTIONS_MAP, rosidl_message_type_support_t, rosidl_typesupport_introspection_c__MessageMember, rosidl_typesupport_introspection_c__MessageMembers, rosidl_typesupport_introspection_c_field_types::{self, *}};
+use std::{borrow::Cow, ffi::CStr, mem};
+use crate::{FUNCTIONS_MAP, rosidl_message_type_support_t, rosidl_typesupport_introspection_c__MessageMember, rosidl_typesupport_introspection_c__MessageMember_s, rosidl_typesupport_introspection_c__MessageMembers, rosidl_typesupport_introspection_c_field_types::{self, *}};
 
-use quote::format_ident;
+use quote::{format_ident, quote};
 
 
 /// 解析类型支持句柄中的成员信息
-struct Introspection<'a> {
+pub struct Introspection<'a> {
     pub module: &'a str,
     pub prefix: &'a str,
     pub name: &'a str,
@@ -30,14 +30,14 @@ impl TypeSupport {
         TypeSupport(*ptr)
     }
 
-    // pub unsafe fn introspection(&self) -> Introspection {
-    //     let type_support_members = self.0.data as *const rosidl_typesupport_introspection_c__MessageMembers;
-    //     let namespace = CStr::from_ptr((*type_support_members).message_namespace_).to_str().unwrap();
-    //     let name = CStr::from_ptr((*type_support_members).message_name_).to_str().unwrap();
-    //     let (module, prefix) = namespace.split_once("__").expect("Invalid namespace format");
-    //     let member_slice = slice::from_raw_parts((*type_support_members).members_, (*type_support_members).member_count_ as usize);
-    //     Introspection { module, prefix, name, members: member_slice }
-    // }
+    pub unsafe fn to_introspection(&self) -> Introspection {
+        let type_support_members = self.0.data as *const rosidl_typesupport_introspection_c__MessageMembers;
+        let namespace = CStr::from_ptr((*type_support_members).message_namespace_).to_str().unwrap();
+        let name = CStr::from_ptr((*type_support_members).message_name_).to_str().unwrap();
+        let (module, prefix) = namespace.split_once("__").expect("Invalid namespace format");
+        let member_slice = slice::from_raw_parts((*type_support_members).members_, (*type_support_members).member_count_ as usize);
+        Introspection { module, prefix, name, members: member_slice }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,6 +134,30 @@ impl Into<rosidl_typesupport_introspection_c_field_types> for MemberType {
     }
 }
 
+#[repr(transparent)]
+pub struct MessageMeta(rosidl_typesupport_introspection_c__MessageMembers);
+
+impl MessageMeta {
+    pub fn message_namespace(&self) -> &str {
+        unsafe { CStr::from_ptr(self.0.message_namespace_).to_str().unwrap() }
+    }
+    pub fn message_name(&self) -> &str {
+        unsafe { CStr::from_ptr(self.0.message_name_).to_str().unwrap() }
+    }
+    pub fn member_count(&self) -> usize {
+        self.0.member_count_ as usize
+    }
+    pub fn size_of(&self) -> usize {
+        self.0.size_of_
+    }
+    pub fn members(&self) -> &[MessageMember] {
+        unsafe { 
+            let member= slice::from_raw_parts(self.0.members_, self.member_count());
+            mem::transmute(member)
+        }
+    }
+}
+
 /// rosidl_typesupport_introspection_c__MessageMember 的安全包装类
 #[repr(transparent)]
 pub struct MessageMember(rosidl_typesupport_introspection_c__MessageMember);
@@ -142,6 +166,10 @@ impl MessageMember {
     /// 成员名称
     pub fn name(&self) -> &str {
         unsafe { CStr::from_ptr(self.0.name_).to_str().unwrap() }
+    }
+    /// Rust 版本的成员名称
+    pub fn rust_name(&self) -> Cow<'_, str> {
+        rust_mangle(self.name())
     }
 
     pub fn type_id(&self) -> MemberType {
@@ -190,6 +218,37 @@ unsafe fn get_message_type_support_handle<'a>(ptr: *const rosidl_message_type_su
     let member_slice = slice::from_raw_parts((*type_support_members).members_, (*type_support_members).member_count_ as usize);
     (c_struct, member_slice)
 }
+
+/// 混淆 Rust 关键字和非法字符
+ pub fn rust_mangle<'a>(name: &'a str) -> Cow<'a, str> {
+        if name.contains('@') ||
+            name.contains('?') ||
+            name.contains('$') ||
+            matches!(
+                name,
+                "abstract" | "alignof" | "as" | "async" | "await" | "become" |
+                    "box" | "break" | "const" | "continue" | "crate" | "do" |
+                    "dyn" | "else" | "enum" | "extern" | "false" | "final" |
+                    "fn" | "for" | "if" | "impl" | "in" | "let" | "loop" |
+                    "macro" | "match" | "mod" | "move" | "mut" | "offsetof" |
+                    "override" | "priv" | "proc" | "pub" | "pure" | "ref" |
+                    "return" | "Self" | "self" | "sizeof" | "static" |
+                    "struct" | "super" | "trait" | "true" | "try" | "type" | "typeof" |
+                    "unsafe" | "unsized" | "use" | "virtual" | "where" |
+                    "while" | "yield" | "str" | "bool" | "f32" | "f64" |
+                    "usize" | "isize" | "u128" | "i128" | "u64" | "i64" |
+                    "u32" | "i32" | "u16" | "i16" | "u8" | "i8" | "_"
+            )
+        {
+            let mut s = name.to_owned();
+            s = s.replace('@', "_");
+            s = s.replace('?', "_");
+            s = s.replace('$', "_");
+            s.push('_');
+            return Cow::Owned(s);
+        }
+        Cow::Borrowed(name)
+    }
 
 pub fn generate_rust_msg(module: &str, prefix: &str, name: &str) -> proc_macro2::TokenStream {
     let tokens = proc_macro2::TokenStream::new();
