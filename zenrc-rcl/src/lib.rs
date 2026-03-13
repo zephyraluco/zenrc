@@ -10,9 +10,11 @@ mod rust_types;
 // 测试
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::Path;
+
     use super::*;
-    use crate::rust_types::{TypeSupport, MessageMember};
-    use std::mem;
+    use crate::rust_types::{TypeSupport, generate_rust_msg};
 
     #[test]
     fn test_print_all_message_types() {
@@ -44,9 +46,7 @@ mod tests {
             if !introspection.members.is_empty() {
                 writeln!(file, "  成员:").unwrap();
                 for member in introspection.members {
-                    let member_wrapper = unsafe {
-                        mem::transmute::<&rosidl_typesupport_introspection_c__MessageMember, &MessageMember>(member)
-                    };
+                    let member_wrapper = member;
 
                     writeln!(file, "    - {}", member_wrapper.name()).unwrap();
                     writeln!(file, "      类型: {:?}", member_wrapper.type_id()).unwrap();
@@ -88,13 +88,86 @@ mod tests {
             println!("成员:");
 
             for member in introspection.members {
-                let member_wrapper = unsafe {
-                    mem::transmute::<&rosidl_typesupport_introspection_c__MessageMember, &MessageMember>(member)
-                };
-                println!("  {} ({:?})", member_wrapper.name(), member_wrapper.type_id());
+                let member_wrapper = member; // 直接使用成员，不进行额外包装
+                println!(
+                    "  {} ({:?})",
+                    member_wrapper.name(),
+                    member_wrapper.type_id()
+                );
             }
         } else {
             println!("std_msgs__msg__String 类型未找到");
         }
+    }
+
+    #[test]
+    fn test_generate_all_available_messages() {
+        use std::collections::HashMap;
+
+        // 遍历所有可用的消息类型并生成
+        let output_dir = Path::new("generated_types_all");
+        if !output_dir.exists() {
+            fs::create_dir_all(output_dir).expect("无法创建输出目录");
+        }
+
+        let mut generated_count = 0;
+        let mut failed_count = 0;
+        let mut modules: HashMap<String, Vec<String>> = HashMap::new();
+
+        // 第一步：按模块分组并生成代码
+        for (type_name, _) in FUNCTIONS_MAP.entries() {
+            // 解析 key: module__prefix__name
+            let parts: Vec<&str> = type_name.split("__").collect();
+            if parts.len() != 3 {
+                println!("跳过无效的键格式: {}", type_name);
+                continue;
+            }
+
+            let (module, prefix, name) = (parts[0], parts[1], parts[2]);
+
+            // 只处理 msg 类型
+            if prefix != "msg" {
+                continue;
+            }
+
+            match std::panic::catch_unwind(|| generate_rust_msg(module, prefix, name)) {
+                Ok(tokens) => {
+                    let rust_code = tokens.to_string();
+                    modules
+                        .entry(module.to_string())
+                        .or_insert_with(Vec::new)
+                        .push(rust_code);
+                    generated_count += 1;
+                    println!("✓ 已生成: {}", type_name);
+                }
+                Err(e) => {
+                    failed_count += 1;
+                    println!("✗ 生成失败 {}: {:?}", type_name, e);
+                }
+            }
+        }
+
+        // 第二步：合并同一模块的所有类型并格式化
+        for (module, codes) in modules {
+            let combined_code = codes.join("\n\n");
+
+            // 使用 prettyplease 格式化代码
+            let formatted_code = match syn::parse_file(&combined_code) {
+                Ok(syntax_tree) => prettyplease::unparse(&syntax_tree),
+                Err(_) => {
+                    println!("⚠ 格式化失败，使用原始代码: {}", module);
+                    combined_code
+                }
+            };
+
+            let file_path = output_dir.join(format!("{}.rs", module));
+            fs::write(&file_path, formatted_code).expect("无法写入文件");
+        }
+
+        println!("\n总结:");
+        println!("  已生成: {}", generated_count);
+        println!("  失败: {}", failed_count);
+        // println!("  模块数: {}", modules.len());
+        println!("  输出目录: {}", output_dir.display());
     }
 }

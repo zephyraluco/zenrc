@@ -16,6 +16,7 @@ phf = { version = "0.13", features = ["macros"] }
 syn = "2.0"
 quote = "1.0"
 proc-macro2 = "1.0"
+prettyplease = "0.2"
 
 [build-dependencies]
 bindgen = "0.72"

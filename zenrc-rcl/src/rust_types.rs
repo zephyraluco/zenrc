@@ -3,18 +3,25 @@
 #![allow(non_snake_case)]
 
 use core::slice;
-use std::{borrow::Cow, ffi::CStr, mem};
-use crate::{FUNCTIONS_MAP, rosidl_message_type_support_t, rosidl_typesupport_introspection_c__MessageMember, rosidl_typesupport_introspection_c__MessageMember_s, rosidl_typesupport_introspection_c__MessageMembers, rosidl_typesupport_introspection_c_field_types::{self, *}};
+use std::borrow::Cow;
+use std::ffi::CStr;
+use std::mem;
 
 use quote::{format_ident, quote};
 
+use crate::rosidl_typesupport_introspection_c_field_types::{self, *};
+use crate::{
+    FUNCTIONS_MAP, rosidl_message_type_support_t,
+    rosidl_typesupport_introspection_c__MessageMember,
+    rosidl_typesupport_introspection_c__MessageMembers,
+};
 
 /// 解析类型支持句柄中的成员信息
 pub struct Introspection<'a> {
     pub module: &'a str,
     pub prefix: &'a str,
     pub name: &'a str,
-    pub members: &'a [rosidl_typesupport_introspection_c__MessageMember],
+    pub members: &'a [MessageMember],
 }
 impl<'a> Introspection<'a> {
     pub fn name(&self) -> String {
@@ -26,17 +33,25 @@ impl<'a> Introspection<'a> {
 #[repr(transparent)]
 pub struct TypeSupport(rosidl_message_type_support_t);
 impl TypeSupport {
-    pub unsafe fn from_ptr(ptr: *const rosidl_message_type_support_t) -> Self {
-        TypeSupport(*ptr)
+    pub fn from_ptr<'a>(ptr: *const rosidl_message_type_support_t) -> &'a Self {
+        unsafe { &*(ptr as *const TypeSupport) }
     }
 
-    pub unsafe fn to_introspection(&self) -> Introspection {
-        let type_support_members = self.0.data as *const rosidl_typesupport_introspection_c__MessageMembers;
-        let namespace = CStr::from_ptr((*type_support_members).message_namespace_).to_str().unwrap();
-        let name = CStr::from_ptr((*type_support_members).message_name_).to_str().unwrap();
-        let (module, prefix) = namespace.split_once("__").expect("Invalid namespace format");
-        let member_slice = slice::from_raw_parts((*type_support_members).members_, (*type_support_members).member_count_ as usize);
-        Introspection { module, prefix, name, members: member_slice }
+    pub fn to_introspection(&self) -> Introspection<'_> {
+        let type_support_members = MessageMeta::from_ptr(
+            self.0.data as *const rosidl_typesupport_introspection_c__MessageMembers,
+        );
+        let namespace = type_support_members.message_namespace();
+        let name = type_support_members.message_name();
+        let (module, prefix) = namespace
+            .split_once("__")
+            .expect("Invalid namespace format");
+        Introspection {
+            module,
+            prefix,
+            name,
+            members: type_support_members.members(),
+        }
     }
 }
 
@@ -85,6 +100,27 @@ impl MemberType {
             _ => return None,
         })
     }
+    pub fn to_rust_type(&self) -> proc_macro2::TokenStream {
+        match self {
+            MemberType::Bool => quote! { bool },
+            MemberType::I8 => quote! { i8 },
+            MemberType::I16 => quote! { i16 },
+            MemberType::I32 => quote! { i32 },
+            MemberType::I64 => quote! { i64 },
+            MemberType::U8 => quote! { u8 },
+            MemberType::U16 => quote! { u16 },
+            MemberType::U32 => quote! { u32 },
+            MemberType::U64 => quote! { u64 },
+            MemberType::U128 => quote! { u128 },
+            MemberType::F32 => quote! { f32 },
+            MemberType::F64 => quote! { f64 },
+            MemberType::Char => quote! { std::ffi::c_char },
+            MemberType::WChar => quote! { u16 },
+            MemberType::String => quote! { std::string::String },
+            MemberType::WString => quote! { std::string::String },
+            MemberType::Message => quote! { message },
+        }
+    }
 }
 impl From<rosidl_typesupport_introspection_c_field_types> for MemberType {
     fn from(value: rosidl_typesupport_introspection_c_field_types) -> Self {
@@ -94,7 +130,8 @@ impl From<rosidl_typesupport_introspection_c_field_types> for MemberType {
             rosidl_typesupport_introspection_c__ROS_TYPE_INT16 => MemberType::I16,
             rosidl_typesupport_introspection_c__ROS_TYPE_INT32 => MemberType::I32,
             rosidl_typesupport_introspection_c__ROS_TYPE_INT64 => MemberType::I64,
-            rosidl_typesupport_introspection_c__ROS_TYPE_UINT8 | rosidl_typesupport_introspection_c__ROS_TYPE_OCTET => MemberType::U8,
+            rosidl_typesupport_introspection_c__ROS_TYPE_UINT8
+            | rosidl_typesupport_introspection_c__ROS_TYPE_OCTET => MemberType::U8,
             rosidl_typesupport_introspection_c__ROS_TYPE_UINT16 => MemberType::U16,
             rosidl_typesupport_introspection_c__ROS_TYPE_UINT32 => MemberType::U32,
             rosidl_typesupport_introspection_c__ROS_TYPE_UINT64 => MemberType::U64,
@@ -138,6 +175,11 @@ impl Into<rosidl_typesupport_introspection_c_field_types> for MemberType {
 pub struct MessageMeta(rosidl_typesupport_introspection_c__MessageMembers);
 
 impl MessageMeta {
+    pub fn from_ptr<'a>(
+        ptr: *const rosidl_typesupport_introspection_c__MessageMembers,
+    ) -> &'a Self {
+        unsafe { &*(ptr as *const MessageMeta) }
+    }
     pub fn message_namespace(&self) -> &str {
         unsafe { CStr::from_ptr(self.0.message_namespace_).to_str().unwrap() }
     }
@@ -151,8 +193,8 @@ impl MessageMeta {
         self.0.size_of_
     }
     pub fn members(&self) -> &[MessageMember] {
-        unsafe { 
-            let member= slice::from_raw_parts(self.0.members_, self.member_count());
+        unsafe {
+            let member = slice::from_raw_parts(self.0.members_, self.member_count());
             mem::transmute(member)
         }
     }
@@ -163,6 +205,9 @@ impl MessageMeta {
 pub struct MessageMember(rosidl_typesupport_introspection_c__MessageMember);
 
 impl MessageMember {
+    pub fn from_ptr<'a>(ptr: *const rosidl_typesupport_introspection_c__MessageMember) -> &'a Self {
+        unsafe { &*(ptr as *const MessageMember) }
+    }
     /// 成员名称
     pub fn name(&self) -> &str {
         unsafe { CStr::from_ptr(self.0.name_).to_str().unwrap() }
@@ -177,8 +222,16 @@ impl MessageMember {
     }
 
     pub fn string_upper_bound(&self) -> Option<usize> {
-        if self.type_id() ==  MemberType::String {
+        if self.type_id() == MemberType::String {
             Some(self.0.string_upper_bound_ as usize)
+        } else {
+            None
+        }
+    }
+
+    pub fn get_ts_ptr(&self) -> Option<&TypeSupport> {
+        if self.type_id() == MemberType::Message {
+            Some(TypeSupport::from_ptr(self.0.members_))
         } else {
             None
         }
@@ -207,66 +260,402 @@ impl MessageMember {
     }
 }
 
-
-/// 获取消息类型支持句柄并解析成员信息
-unsafe fn get_message_type_support_handle<'a>(ptr: *const rosidl_message_type_support_t) -> (String,&'a [rosidl_typesupport_introspection_c__MessageMember]) {
-    let type_support_members = (*ptr).data as *const rosidl_typesupport_introspection_c__MessageMembers;
-    let namespace = CStr::from_ptr((*type_support_members).message_namespace_).to_str().unwrap();
-    let name = CStr::from_ptr((*type_support_members).message_name_).to_str().unwrap();
-    let (module, prefix) = namespace.split_once("__").expect("Invalid namespace format");
-    let c_struct = format!("{module}__{prefix}__{name}");
-    let member_slice = slice::from_raw_parts((*type_support_members).members_, (*type_support_members).member_count_ as usize);
-    (c_struct, member_slice)
+/// 混淆 Rust 关键字和非法字符
+pub fn rust_mangle<'a>(name: &'a str) -> Cow<'a, str> {
+    if name.contains('@')
+        || name.contains('?')
+        || name.contains('$')
+        || matches!(
+            name,
+            "abstract"
+                | "alignof"
+                | "as"
+                | "async"
+                | "await"
+                | "become"
+                | "box"
+                | "break"
+                | "const"
+                | "continue"
+                | "crate"
+                | "do"
+                | "dyn"
+                | "else"
+                | "enum"
+                | "extern"
+                | "false"
+                | "final"
+                | "fn"
+                | "for"
+                | "if"
+                | "impl"
+                | "in"
+                | "let"
+                | "loop"
+                | "macro"
+                | "match"
+                | "mod"
+                | "move"
+                | "mut"
+                | "offsetof"
+                | "override"
+                | "priv"
+                | "proc"
+                | "pub"
+                | "pure"
+                | "ref"
+                | "return"
+                | "Self"
+                | "self"
+                | "sizeof"
+                | "static"
+                | "struct"
+                | "super"
+                | "trait"
+                | "true"
+                | "try"
+                | "type"
+                | "typeof"
+                | "unsafe"
+                | "unsized"
+                | "use"
+                | "virtual"
+                | "where"
+                | "while"
+                | "yield"
+                | "str"
+                | "bool"
+                | "f32"
+                | "f64"
+                | "usize"
+                | "isize"
+                | "u128"
+                | "i128"
+                | "u64"
+                | "i64"
+                | "u32"
+                | "i32"
+                | "u16"
+                | "i16"
+                | "u8"
+                | "i8"
+                | "_"
+        )
+    {
+        let mut s = name.to_owned();
+        s = s.replace('@', "_");
+        s = s.replace('?', "_");
+        s = s.replace('$', "_");
+        s.push('_');
+        return Cow::Owned(s);
+    }
+    Cow::Borrowed(name)
 }
 
-/// 混淆 Rust 关键字和非法字符
- pub fn rust_mangle<'a>(name: &'a str) -> Cow<'a, str> {
-        if name.contains('@') ||
-            name.contains('?') ||
-            name.contains('$') ||
-            matches!(
-                name,
-                "abstract" | "alignof" | "as" | "async" | "await" | "become" |
-                    "box" | "break" | "const" | "continue" | "crate" | "do" |
-                    "dyn" | "else" | "enum" | "extern" | "false" | "final" |
-                    "fn" | "for" | "if" | "impl" | "in" | "let" | "loop" |
-                    "macro" | "match" | "mod" | "move" | "mut" | "offsetof" |
-                    "override" | "priv" | "proc" | "pub" | "pure" | "ref" |
-                    "return" | "Self" | "self" | "sizeof" | "static" |
-                    "struct" | "super" | "trait" | "true" | "try" | "type" | "typeof" |
-                    "unsafe" | "unsized" | "use" | "virtual" | "where" |
-                    "while" | "yield" | "str" | "bool" | "f32" | "f64" |
-                    "usize" | "isize" | "u128" | "i128" | "u64" | "i64" |
-                    "u32" | "i32" | "u16" | "i16" | "u8" | "i8" | "_"
-            )
-        {
-            let mut s = name.to_owned();
-            s = s.replace('@', "_");
-            s = s.replace('?', "_");
-            s = s.replace('$', "_");
-            s.push('_');
-            return Cow::Owned(s);
+/// 生成字段类型的 TokenStream 和 serde 属性
+fn generate_struct_field(member: &MessageMember) -> proc_macro2::TokenStream {
+    let c_field_name = member.name();
+    let field_name = member.rust_name();
+    let field_type = member.type_id();
+    let field_ident = format_ident!("{}", field_name);
+
+    // 如果是嵌套消息类型，需要递归生成 Rust 结构体
+    let field_type_stream = if let Some(m_ts_ptr) = member.get_ts_ptr() {
+        let m_intro = m_ts_ptr.to_introspection();
+        let m_module_ident = format_ident!("{}", m_intro.module);
+        let m_prefix_ident = format_ident!("{}", m_intro.prefix);
+        let m_name_ident = format_ident!("{}", m_intro.name);
+        if m_intro.prefix == "action" {
+            if let Some((r#type, suffix)) = m_intro.name.rsplit_once("_") {
+                let type_ident = format_ident!("{}", r#type);
+                let suffix_ident = format_ident!("{}", suffix);
+                quote! { #m_module_ident :: #m_prefix_ident :: #type_ident :: #suffix_ident }
+            } else {
+                quote! { #m_module_ident :: #m_prefix_ident :: #m_name_ident }
+            }
+        } else {
+            quote! { #m_module_ident :: #m_prefix_ident :: #m_name_ident }
         }
-        Cow::Borrowed(name)
-    }
+    } else {
+        // 其他基本类型直接转换
+        field_type.to_rust_type()
+    };
 
-pub fn generate_rust_msg(module: &str, prefix: &str, name: &str) -> proc_macro2::TokenStream {
-    let tokens = proc_macro2::TokenStream::new();
-    let key = format!("{}__{}__{}", module, prefix, name);
+    let field = if member.is_array() {
+        quote! { pub #field_ident : Vec< #field_type_stream > }
+    } else {
+        quote! { pub #field_ident : #field_type_stream }
+    };
+
+    let attr = if field_name != c_field_name {
+        Some(quote! { #[serde(rename = #c_field_name )] })
+    } else {
+        None
+    };
+    quote! {
+        #attr
+        #field
+    }
+    // (field, attr)
+}
+
+/// 生成 from_native 函数中的字段转换代码
+fn generate_from_native_field(member: &MessageMember) -> proc_macro2::TokenStream {
+    let field_name = member.rust_name();
+    let field_type = member.type_id();
+    let field_ident = format_ident!("{}", field_name);
+
+    if let Some(size) = member.array_size() {
+        // 如果是数组类型，并且有固定大小，生成固定大小数组
+        if size > 0 && !member.is_upper_bound() {
+            match field_type {
+                MemberType::Message => {
+                    let m_intro = member.get_ts_ptr().unwrap().to_introspection();
+                    let m_module_ident = format_ident!("{}", m_intro.module);
+                    let m_prefix_ident = format_ident!("{}", m_intro.prefix);
+                    let m_name_ident = format_ident!("{}", m_intro.name);
+                    quote! {
+                        #field_ident: {
+                            let vec: Vec<_> = msg
+                                .#field_ident
+                                .iter()
+                                .map(|s| #m_module_ident::#m_prefix_ident::#m_name_ident::from_native(s))
+                                .collect();
+                            vec
+                        },
+                    }
+                }
+                MemberType::String | MemberType::WString => {
+                    quote! {
+                        #field_ident: msg.#field_ident.iter().map(|s| s.to_str().to_owned()).collect(),
+                    }
+                }
+                _ => {
+                    quote! {
+                        #field_ident: msg.#field_ident.to_vec(),
+                    }
+                }
+            }
+        } else {
+            if field_type == MemberType::Message {
+                let m_intro = member.get_ts_ptr().unwrap().to_introspection();
+                let m_module_ident = format_ident!("{}", m_intro.module);
+                let m_prefix_ident = format_ident!("{}", m_intro.prefix);
+                let m_name_ident = format_ident!("{}", m_intro.name);
+
+                quote! {
+                    #field_ident: {
+                        let mut temp = Vec::with_capacity(msg.#field_ident.size);
+                        if msg.#field_ident.data != std::ptr::null_mut() {
+                            let slice = unsafe {
+                                std::slice::from_raw_parts(
+                                    msg.#field_ident.data,
+                                    msg.#field_ident.size
+                                )
+                            };
+                            for s in slice {
+                                temp.push(#m_module_ident::#m_prefix_ident::#m_name_ident::from_native(s));
+                            }
+                        }
+                        temp
+                    },
+                }
+            } else {
+                quote! {
+                    #field_ident: msg.#field_ident.to_vec(),
+                }
+            }
+        }
+    } else {
+        match field_type {
+            MemberType::String | MemberType::WString => {
+                quote! {
+                    #field_ident: msg.#field_ident.to_str().to_owned(),
+                }
+            }
+            MemberType::Message => {
+                let m_intro = member.get_ts_ptr().unwrap().to_introspection();
+                let m_module_ident = format_ident!("{}", m_intro.module);
+                let m_prefix_ident = format_ident!("{}", m_intro.prefix);
+
+                // same hack as above to rustify message type names
+                if m_intro.prefix == "action" {
+                    let (srvname, msgname) =
+                        m_intro.name.rsplit_once("_").expect("ooops at from_native");
+                    let srvname_ident = format_ident!("{srvname}");
+                    let msgname_ident = format_ident!("{msgname}");
+
+                    quote! {
+                        #field_ident: #m_module_ident::#m_prefix_ident::#srvname_ident::#msgname_ident::from_native(&msg.#field_ident),
+                    }
+                } else {
+                    let name_ident = format_ident!("{}", m_intro.name);
+
+                    quote! {
+                        #field_ident: #m_module_ident::#m_prefix_ident::#name_ident::from_native(&msg.#field_ident),
+                    }
+                }
+            }
+            _ => {
+                quote! {
+                    #field_ident: msg.#field_ident,
+                }
+            }
+        }
+    }
+}
+
+fn generate_copy_to_native_field(member: &MessageMember) -> proc_macro2::TokenStream {
+    let field_name = member.rust_name();
+    let field_type = member.type_id();
+    let field_ident = format_ident!("{}", field_name);
+
+    if let Some(size) = member.array_size() {
+        // 如果是数组类型，并且有固定大小，生成固定大小数组
+        if size > 0 && !member.is_upper_bound() {
+            match field_type {
+                MemberType::Message => {
+                    quote! {
+                        for (t, s) in msg.#field_ident.iter_mut().zip(&self.#field_ident) {
+                            s.copy_to_native(t);
+                        }
+                    }
+                }
+                MemberType::String | MemberType::WString => {
+                    quote! {
+                        for (t, s) in msg.#field_ident.iter_mut().zip(&self.#field_ident) {
+                            t.assign(&s);
+                        }
+                    }
+                }
+                _ => {
+                    quote! {
+                        msg.#field_ident.copy_from_slice(&self.#field_ident[..#size]);
+                    }
+                }
+            }
+        } else {
+            if field_type == MemberType::Message {
+                let m_intro = member.get_ts_ptr().unwrap().to_introspection();
+                let c_struct = format!("{}__{}__{}", m_intro.module, m_intro.prefix, m_intro.name);
+                let init_func_ident = format_ident!("{c_struct}__Sequence__init");
+                let fini_func_ident = format_ident!("{c_struct}__Sequence__fini");
+
+                quote! {
+                    unsafe {
+                        #fini_func_ident(&mut msg.#field_ident);
+                        #init_func_ident(&mut msg.#field_ident, self.#field_ident.len());
+
+                        if msg.#field_ident.data != std::ptr::null_mut() {
+                            let slice = std::slice::from_raw_parts_mut(msg.#field_ident.data, msg.#field_ident.size);
+                            for (t, s) in slice.iter_mut().zip(&self.#field_ident) {
+                                s.copy_to_native(t);
+                            }
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    msg.#field_ident.update(&self.#field_ident);
+                }
+            }
+        }
+    } else {
+        match field_type {
+            MemberType::String | MemberType::WString => {
+                quote! {
+                    msg.#field_ident.assign(&self.#field_ident);
+                }
+            }
+            MemberType::Message => {
+                quote! {
+                    self.#field_ident.copy_to_native(&mut msg.#field_ident);
+                }
+            }
+            _ => {
+                quote! {
+                    msg.#field_ident = self.#field_ident;
+                }
+            }
+        }
+    }
+}
+
+/// 生成 Rust 结构体定义的 TokenStream
+pub fn generate_rust_msg(module_: &str, prefix_: &str, name_: &str) -> proc_macro2::TokenStream {
+    let key = format!("{}__{}__{}", module_, prefix_, name_);
     let function = FUNCTIONS_MAP.get(key.as_str()).expect("Message not found");
-    
-    let ts_ptr = unsafe { function() };
-    let (c_struct, c_members) = unsafe { get_message_type_support_handle(ts_ptr) };
-    
+
+    // 解析类型支持句柄，获取成员信息
+    let ts = unsafe { TypeSupport::from_ptr(function()) };
+    let Introspection {
+        module,
+        prefix,
+        name,
+        members,
+    } = ts.to_introspection();
+
     //? 这里可以使用 `c_struct` 来验证类型支持句柄的结构是否正确
-    assert!(format!("{}__{}__{}", module, prefix, name) == c_struct, "Type support handle does not match expected structure name");
+    assert!(
+        format!("{}__{}__{}", module, prefix, name) == key,
+        "Type support handle does not match expected structure name"
+    );
 
-    //?  暂时仅生成msg
-    if prefix != "msg" {
-        panic!("Only message types are supported for now");
+    // 过滤srv和action的特殊命名
+    let name = if prefix == "srv" || prefix == "action" {
+        // name.rsplit_once("__").map(|(name, _)| name).unwrap_or(name);
+        name.split("_")
+            .last()
+            .expect("Invalid service/action name format")
+    } else {
+        name
+    };
+
+    // 当前成员的名称和类型
+    let name_ident = format_ident!("{name}");
+    let c_struct_ident = format_ident!("{}__{}__{}", module, prefix, name);
+
+    // 生成字段定义、from_native 和 copy_to_native 转换代码
+    let members_data: Vec<_> = members
+        .into_iter()
+        // 过滤掉 ROS2 中自动添加的占位成员
+        .filter(|m| m.rust_name() != "structure_needs_at_least_one_member")
+        .map(|member| {
+            let fields = generate_struct_field(&member);
+            let from_native = generate_from_native_field(&member);
+            let copy_to_native = generate_copy_to_native_field(&member);
+            (fields, from_native, copy_to_native)
+        })
+        .collect();
+
+    let fields_vec: Vec<_> = members_data.iter().map(|(f, _, _)| f).collect();
+    let from_native_vec: Vec<_> = members_data.iter().map(|(_, fn_code, _)| fn_code).collect();
+    let copy_to_native_vec: Vec<_> = members_data.iter().map(|(_, _, ctn_code)| ctn_code).collect();
+
+    // 生成 Rust 结构体定义
+    let fields = quote! { #(#fields_vec),* };
+    let from_native_fields = quote! { #(#from_native_vec)* };
+    let copy_to_native_fields = quote! { #(#copy_to_native_vec)* };
+
+    quote! {
+        #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+        #[serde(default)]
+        pub struct #name_ident {
+            #fields
+        }
+
+        fn from_native(#[allow(unused)] msg: &Self::CStruct) -> #name_ident {
+            #name_ident {
+                #from_native_fields
+            }
+        }
+
+        fn copy_to_native(&self, #[allow(unused)] msg: &mut Self::CStruct) {
+            #copy_to_native_fields
+        }
+
+        // #typesupport
+        // #impl_default
+        // #impl_constants
     }
-    let name = format_ident!("{name}");
-    let c_struct_ident = format_ident!("{c_struct}");
-
-    tokens
 }
