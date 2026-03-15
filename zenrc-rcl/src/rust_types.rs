@@ -11,7 +11,7 @@ use quote::{format_ident, quote};
 
 use crate::rosidl_typesupport_introspection_c_field_types::{self, *};
 use crate::{
-    FUNCTIONS_MAP, rosidl_message_type_support_t,
+    CONSTANTS_MAP, FUNCTIONS_MAP, rosidl_message_type_support_t,
     rosidl_typesupport_introspection_c__MessageMember,
     rosidl_typesupport_introspection_c__MessageMembers,
 };
@@ -630,12 +630,102 @@ pub fn generate_rust_msg(module_: &str, prefix_: &str, name_: &str) -> proc_macr
 
     let fields_vec: Vec<_> = members_data.iter().map(|(f, _, _)| f).collect();
     let from_native_vec: Vec<_> = members_data.iter().map(|(_, fn_code, _)| fn_code).collect();
-    let copy_to_native_vec: Vec<_> = members_data.iter().map(|(_, _, ctn_code)| ctn_code).collect();
+    let copy_to_native_vec: Vec<_> = members_data
+        .iter()
+        .map(|(_, _, ctn_code)| ctn_code)
+        .collect();
 
     // 生成 Rust 结构体定义
     let fields = quote! { #(#fields_vec),* };
     let from_native_fields = quote! { #(#from_native_vec)* };
     let copy_to_native_fields = quote! { #(#copy_to_native_vec)* };
+
+    // 生成类型支持包装实现
+    let ts_wrapper = {
+        let type_support_handle = format_ident!(
+            "rosidl_typesupport_c__get_message_type_support_handle__{c_struct_ident}"
+        );
+        let create_func = format_ident!("{c_struct_ident}__create");
+        let destroy_func = format_ident!("{c_struct_ident}__destroy");
+
+        quote! {
+            impl WrappedTypesupport for #name_ident {
+                type CStruct = #c_struct_ident;
+
+                fn get_ts() -> &'static rosidl_message_type_support_t {
+                    unsafe {
+                        &* #type_support_handle()
+                    }
+                }
+
+                fn create_msg() -> *mut #c_struct_ident {
+                    unsafe {
+                        #create_func ()
+                    }
+                    #create_func ()
+                }
+
+                fn destroy_msg(msg: *mut #c_struct_ident) -> () {
+                    unsafe {
+                        #destroy_func (msg)
+                    };
+                    #destroy_func (msg)
+                }
+
+                fn from_native(#[allow(unused)] msg: &Self::CStruct) -> #name_ident {
+                    #name_ident {
+                        #from_native_fields
+                    }
+                }
+                fn copy_to_native(&self, #[allow(unused)] msg: &mut Self::CStruct) {
+                    #copy_to_native_fields
+                }
+            }
+        }
+    };
+
+    let impl_default = quote! {
+        impl Default for #name_ident {
+            fn default() -> Self {
+                let msg_native = WrappedNativeMsg::< #name_ident >::new();
+                #name_ident :: from_native(&msg_native)
+            }
+        }
+    };
+
+    let constant_items: Vec<_> = CONSTANTS_MAP
+        .get(&key)
+        .cloned()
+        .into_iter()
+        .flatten()
+        .map(|(const_name, typ)| {
+            let const_name = format_ident!("{const_name}");
+            let value = format_ident!("{key}__{const_name}");
+            // 引用类型时需要添加 'static 生命周期
+            if let Ok(mut typ) = syn::parse_str::<Box<syn::TypeReference>>(typ) {
+                typ.lifetime = Some(syn::Lifetime::new(
+                    "'static",
+                    proc_macro2::Span::call_site(),
+                ));
+                quote! { pub const #const_name: #typ = #value; }
+            } else if let Ok(typ) = syn::parse_str::<Box<syn::Type>>(typ) {
+                quote! { pub const #const_name: #typ = #value; }
+            } else {
+                quote! {}
+            }
+        })
+        .collect();
+
+    let impl_constants = if constant_items.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            #[allow(non_upper_case_globals)]
+            impl #name_ident {
+                #(#constant_items)*
+            }
+        }
+    };
 
     quote! {
         #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -644,18 +734,38 @@ pub fn generate_rust_msg(module_: &str, prefix_: &str, name_: &str) -> proc_macr
             #fields
         }
 
-        fn from_native(#[allow(unused)] msg: &Self::CStruct) -> #name_ident {
-            #name_ident {
-                #from_native_fields
+        #impl_constants
+        #impl_default
+        #ts_wrapper
+    }
+}
+
+pub fn generate_rust_service(
+    module_: &str,
+    prefix_: &str,
+    name_: &str,
+) -> proc_macro2::TokenStream {
+    let ident = format_ident!(
+        "rosidl_typesupport_c__\
+         get_service_type_support_handle__\
+         {module_}__\
+         {prefix_}__\
+         {name_}"
+    );
+
+    quote!(
+        #[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
+        pub struct Service();
+        impl WrappedServiceTypeSupport for Service {
+            type Request = Request;
+            type Response = Response;
+
+            fn get_ts() -> &'static rosidl_service_type_support_t {
+                unsafe {
+                    &* #ident ()
+                }
             }
         }
 
-        fn copy_to_native(&self, #[allow(unused)] msg: &mut Self::CStruct) {
-            #copy_to_native_fields
-        }
-
-        // #typesupport
-        // #impl_default
-        // #impl_constants
-    }
+    )
 }
