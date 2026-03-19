@@ -1,6 +1,7 @@
 use std::ffi::CString;
 use std::ptr;
 use zenrc_rcl::*;
+use zenrc_rcl::generated::std_msgs::msg::String as StdString;
 
 fn main() {
     unsafe {
@@ -31,7 +32,7 @@ fn main() {
         }
 
         // 获取 std_msgs::String 的类型支持
-        let type_support = rosidl_typesupport_c__get_message_type_support_handle__std_msgs__msg__String();
+        let type_support = StdString::get_ts();
 
         // 创建发布者
         let mut publisher = rcl_get_zero_initialized_publisher();
@@ -50,39 +51,21 @@ fn main() {
         // 发布消息循环
         let mut count = 0u32;
         loop {
-            // 创建消息
-            let mut msg: std_msgs__msg__String = std::mem::zeroed();
-            let message_text = format!("Hello World: {}", count);
-            let c_str = CString::new(message_text.clone()).unwrap();
+            // 创建 Rust 消息
+            let rust_msg = StdString {
+                data: format!("Hello World: {}", count),
+            };
 
-            // 分配字符串内存
-            let allocator = rcutils_get_default_allocator();
-            msg.data.data = allocator.allocate.unwrap()(
-                c_str.as_bytes_with_nul().len(),
-                allocator.state,
-            ) as *mut std::os::raw::c_char;
-            msg.data.size = c_str.as_bytes().len();
-            msg.data.capacity = c_str.as_bytes_with_nul().len();
-
-            // 复制字符串数据
-            ptr::copy_nonoverlapping(
-                c_str.as_ptr(),
-                msg.data.data,
-                c_str.as_bytes_with_nul().len(),
-            );
+            // 创建原生消息包装器并复制数据
+            let mut native_msg = NativeMsgWrapper::<StdString>::new();
+            rust_msg.copy_to_native(&mut native_msg);
 
             // 发布消息
-            if rcl_publish(&publisher, &msg as *const _ as *const _, ptr::null_mut()) == 0 {
-                println!("Published: {}", message_text);
+            if rcl_publish(&publisher, native_msg.as_ptr() as *const _, ptr::null_mut()) == 0 {
+                println!("Published: {}", rust_msg.data);
             } else {
                 eprintln!("Failed to publish message");
             }
-
-            // 释放消息内存
-            allocator.deallocate.unwrap()(
-                msg.data.data as *mut _,
-                allocator.state,
-            );
 
             count += 1;
             std::thread::sleep(std::time::Duration::from_secs(1));

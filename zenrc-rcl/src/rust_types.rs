@@ -649,7 +649,7 @@ pub fn generate_rust_msg(module_: &str, prefix_: &str, name_: &str) -> proc_macr
         let destroy_func = format_ident!("{c_struct_ident}__destroy");
 
         quote! {
-            impl WrappedTypesupport for #name_ident {
+            impl TypesupportWrapper for #name_ident {
                 type CStruct = #c_struct_ident;
 
                 fn get_ts() -> &'static rosidl_message_type_support_t {
@@ -658,18 +658,16 @@ pub fn generate_rust_msg(module_: &str, prefix_: &str, name_: &str) -> proc_macr
                     }
                 }
 
-                fn create_msg() -> *mut #c_struct_ident {
+                fn create_msg() -> *mut CStruct {
                     unsafe {
                         #create_func ()
                     }
-                    #create_func ()
                 }
 
-                fn destroy_msg(msg: *mut #c_struct_ident) -> () {
+                fn destroy_msg(msg: *mut CStruct) -> () {
                     unsafe {
                         #destroy_func (msg)
-                    };
-                    #destroy_func (msg)
+                    }
                 }
 
                 fn from_native(#[allow(unused)] msg: &Self::CStruct) -> #name_ident {
@@ -687,7 +685,7 @@ pub fn generate_rust_msg(module_: &str, prefix_: &str, name_: &str) -> proc_macr
     let impl_default = quote! {
         impl Default for #name_ident {
             fn default() -> Self {
-                let msg_native = WrappedNativeMsg::< #name_ident >::new();
+                let msg_native = NativeMsgWrapper::< #name_ident >::new();
                 #name_ident :: from_native(&msg_native)
             }
         }
@@ -756,7 +754,7 @@ pub fn generate_rust_service(
     quote!(
         #[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
         pub struct Service();
-        impl WrappedServiceTypeSupport for Service {
+        impl ServiceTypeSupportWrapper for Service {
             type Request = Request;
             type Response = Response;
 

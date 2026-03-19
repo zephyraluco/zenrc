@@ -6,6 +6,10 @@ include!(concat!(env!("OUT_DIR"), "/rcl_bindings.rs"));
 include!(concat!(env!("OUT_DIR"), "/introspection_maps.rs"));
 
 mod rust_types;
+mod msg_wrapper;
+pub mod generated;
+
+pub use msg_wrapper::{TypesupportWrapper, NativeMsgWrapper, ServiceTypeSupportWrapper};
 
 // 测试
 #[cfg(test)]
@@ -31,10 +35,10 @@ mod tests {
 
             // 调用函数获取类型支持句柄
             let ts_ptr = unsafe { get_type_support() };
-            let type_support = unsafe { TypeSupport::from_ptr(ts_ptr) };
+            let type_support = TypeSupport::from_ptr(ts_ptr);
 
             // 解析类型信息
-            let introspection = unsafe { type_support.to_introspection() };
+            let introspection = type_support.to_introspection();
 
             writeln!(file, "  模块: {}", introspection.module).unwrap();
             writeln!(file, "  前缀: {}", introspection.prefix).unwrap();
@@ -81,8 +85,8 @@ mod tests {
             println!("\n=== std_msgs/String 详细信息 ===\n");
 
             let ts_ptr = unsafe { get_type_support() };
-            let type_support = unsafe { TypeSupport::from_ptr(ts_ptr) };
-            let introspection = unsafe { type_support.to_introspection() };
+            let type_support = TypeSupport::from_ptr(ts_ptr);
+            let introspection = type_support.to_introspection();
 
             println!("完整类型名: {}", introspection.name());
             println!("成员:");

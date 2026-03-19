@@ -910,6 +910,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "paste"
+version = "1.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
 name = "phf"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1103,6 +1109,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]
@@ -1522,6 +1529,7 @@ version = "0.1.0"
 dependencies = [
  "bindgen",
  "os_str_bytes",
+ "paste",
  "phf",
  "phf_codegen",
  "prettyplease",
@@ -1529,6 +1537,7 @@ dependencies = [
  "quote",
  "rayon",
  "regex",
+ "serde",
  "sha2",
  "syn",
 ]
