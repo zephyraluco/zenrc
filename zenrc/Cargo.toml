@@ -1,0 +1,20 @@
+[package]
+name = "zenrc"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["dds"]
+log = ["dep:zenrc-log"]
+rcl = ["dep:zenrc-rcl"]
+dds = ["dep:zenrc-dds"]
+btree = ["dep:zenrc-bt"]
+shm = ["dep:zenrc-shm"]
+full = ["log", "rcl", "dds", "btree", "shm"]
+
+[dependencies]
+zenrc-log = { path = "../zenrc-log", optional = true }
+zenrc-rcl = { path = "../zenrc-rcl", optional = true }
+zenrc-dds = { path = "../zenrc-dds", optional = true }
+zenrc-bt = { path = "../zenrc-bt", optional = true }
+zenrc-shm = { path = "../zenrc-shm", optional = true }

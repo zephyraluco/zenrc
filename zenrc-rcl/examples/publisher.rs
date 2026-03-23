@@ -1,7 +1,6 @@
 use std::ffi::CString;
 use std::ptr;
 use zenrc_rcl::*;
-use zenrc_rcl::generated::std_msgs::msg::String as StdString;
 
 fn main() {
     unsafe {
@@ -32,7 +31,7 @@ fn main() {
         }
 
         // 获取 std_msgs::String 的类型支持
-        let type_support = StdString::get_ts();
+        let type_support = rosidl_typesupport_c__get_message_type_support_handle__std_msgs__msg__String();
 
         // 创建发布者
         let mut publisher = rcl_get_zero_initialized_publisher();
@@ -51,29 +50,31 @@ fn main() {
         // 发布消息循环
         let mut count = 0u32;
         loop {
-            // 创建 Rust 消息
-            let rust_msg = StdString {
-                data: format!("Hello World: {}", count),
-            };
+            // 创建消息
+            let msg = std_msgs__msg__String__create();
+            if msg.is_null() {
+                eprintln!("Failed to create message");
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                continue;
+            }
 
-            // 创建原生消息包装器并复制数据
-            let mut native_msg = NativeMsgWrapper::<StdString>::new();
-            rust_msg.copy_to_native(&mut native_msg);
+            // 设置消息内容
+            let content = format!("Hello World: {}", count);
+            let content_cstr = CString::new(content.clone()).unwrap();
+            rosidl_runtime_c__String__assign(&mut (*msg).data, content_cstr.as_ptr());
 
             // 发布消息
-            if rcl_publish(&publisher, native_msg.as_ptr() as *const _, ptr::null_mut()) == 0 {
-                println!("Published: {}", rust_msg.data);
+            if rcl_publish(&publisher, msg as *const _, ptr::null_mut()) == 0 {
+                println!("Published: {}", content);
             } else {
                 eprintln!("Failed to publish message");
             }
 
+            // 销毁消息
+            std_msgs__msg__String__destroy(msg);
+
             count += 1;
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
-
-        // 清理资源（实际上由于是无限循环，这里不会执行）
-        // rcl_publisher_fini(&mut publisher, &mut node);
-        // rcl_node_fini(&mut node);
-        // rcl_shutdown(&mut context);
     }
 }

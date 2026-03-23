@@ -399,188 +399,6 @@ fn generate_struct_field(member: &MessageMember) -> proc_macro2::TokenStream {
     // (field, attr)
 }
 
-/// 生成 from_native 函数中的字段转换代码
-fn generate_from_native_field(member: &MessageMember) -> proc_macro2::TokenStream {
-    let field_name = member.rust_name();
-    let field_type = member.type_id();
-    let field_ident = format_ident!("{}", field_name);
-
-    if let Some(size) = member.array_size() {
-        // 如果是数组类型，并且有固定大小，生成固定大小数组
-        if size > 0 && !member.is_upper_bound() {
-            match field_type {
-                MemberType::Message => {
-                    let m_intro = member.get_ts_ptr().unwrap().to_introspection();
-                    let m_module_ident = format_ident!("{}", m_intro.module);
-                    let m_prefix_ident = format_ident!("{}", m_intro.prefix);
-                    let m_name_ident = format_ident!("{}", m_intro.name);
-                    quote! {
-                        #field_ident: {
-                            let vec: Vec<_> = msg
-                                .#field_ident
-                                .iter()
-                                .map(|s| #m_module_ident::#m_prefix_ident::#m_name_ident::from_native(s))
-                                .collect();
-                            vec
-                        },
-                    }
-                }
-                MemberType::String | MemberType::WString => {
-                    quote! {
-                        #field_ident: msg.#field_ident.iter().map(|s| s.to_str().to_owned()).collect(),
-                    }
-                }
-                _ => {
-                    quote! {
-                        #field_ident: msg.#field_ident.to_vec(),
-                    }
-                }
-            }
-        } else {
-            if field_type == MemberType::Message {
-                let m_intro = member.get_ts_ptr().unwrap().to_introspection();
-                let m_module_ident = format_ident!("{}", m_intro.module);
-                let m_prefix_ident = format_ident!("{}", m_intro.prefix);
-                let m_name_ident = format_ident!("{}", m_intro.name);
-
-                quote! {
-                    #field_ident: {
-                        let mut temp = Vec::with_capacity(msg.#field_ident.size);
-                        if msg.#field_ident.data != std::ptr::null_mut() {
-                            let slice = unsafe {
-                                std::slice::from_raw_parts(
-                                    msg.#field_ident.data,
-                                    msg.#field_ident.size
-                                )
-                            };
-                            for s in slice {
-                                temp.push(#m_module_ident::#m_prefix_ident::#m_name_ident::from_native(s));
-                            }
-                        }
-                        temp
-                    },
-                }
-            } else {
-                quote! {
-                    #field_ident: msg.#field_ident.to_vec(),
-                }
-            }
-        }
-    } else {
-        match field_type {
-            MemberType::String | MemberType::WString => {
-                quote! {
-                    #field_ident: msg.#field_ident.to_str().to_owned(),
-                }
-            }
-            MemberType::Message => {
-                let m_intro = member.get_ts_ptr().unwrap().to_introspection();
-                let m_module_ident = format_ident!("{}", m_intro.module);
-                let m_prefix_ident = format_ident!("{}", m_intro.prefix);
-
-                // same hack as above to rustify message type names
-                if m_intro.prefix == "action" {
-                    let (srvname, msgname) =
-                        m_intro.name.rsplit_once("_").expect("ooops at from_native");
-                    let srvname_ident = format_ident!("{srvname}");
-                    let msgname_ident = format_ident!("{msgname}");
-
-                    quote! {
-                        #field_ident: #m_module_ident::#m_prefix_ident::#srvname_ident::#msgname_ident::from_native(&msg.#field_ident),
-                    }
-                } else {
-                    let name_ident = format_ident!("{}", m_intro.name);
-
-                    quote! {
-                        #field_ident: #m_module_ident::#m_prefix_ident::#name_ident::from_native(&msg.#field_ident),
-                    }
-                }
-            }
-            _ => {
-                quote! {
-                    #field_ident: msg.#field_ident,
-                }
-            }
-        }
-    }
-}
-
-fn generate_copy_to_native_field(member: &MessageMember) -> proc_macro2::TokenStream {
-    let field_name = member.rust_name();
-    let field_type = member.type_id();
-    let field_ident = format_ident!("{}", field_name);
-
-    if let Some(size) = member.array_size() {
-        // 如果是数组类型，并且有固定大小，生成固定大小数组
-        if size > 0 && !member.is_upper_bound() {
-            match field_type {
-                MemberType::Message => {
-                    quote! {
-                        for (t, s) in msg.#field_ident.iter_mut().zip(&self.#field_ident) {
-                            s.copy_to_native(t);
-                        }
-                    }
-                }
-                MemberType::String | MemberType::WString => {
-                    quote! {
-                        for (t, s) in msg.#field_ident.iter_mut().zip(&self.#field_ident) {
-                            t.assign(&s);
-                        }
-                    }
-                }
-                _ => {
-                    quote! {
-                        msg.#field_ident.copy_from_slice(&self.#field_ident[..#size]);
-                    }
-                }
-            }
-        } else {
-            if field_type == MemberType::Message {
-                let m_intro = member.get_ts_ptr().unwrap().to_introspection();
-                let c_struct = format!("{}__{}__{}", m_intro.module, m_intro.prefix, m_intro.name);
-                let init_func_ident = format_ident!("{c_struct}__Sequence__init");
-                let fini_func_ident = format_ident!("{c_struct}__Sequence__fini");
-
-                quote! {
-                    unsafe {
-                        #fini_func_ident(&mut msg.#field_ident);
-                        #init_func_ident(&mut msg.#field_ident, self.#field_ident.len());
-
-                        if msg.#field_ident.data != std::ptr::null_mut() {
-                            let slice = std::slice::from_raw_parts_mut(msg.#field_ident.data, msg.#field_ident.size);
-                            for (t, s) in slice.iter_mut().zip(&self.#field_ident) {
-                                s.copy_to_native(t);
-                            }
-                        }
-                    }
-                }
-            } else {
-                quote! {
-                    msg.#field_ident.update(&self.#field_ident);
-                }
-            }
-        }
-    } else {
-        match field_type {
-            MemberType::String | MemberType::WString => {
-                quote! {
-                    msg.#field_ident.assign(&self.#field_ident);
-                }
-            }
-            MemberType::Message => {
-                quote! {
-                    self.#field_ident.copy_to_native(&mut msg.#field_ident);
-                }
-            }
-            _ => {
-                quote! {
-                    msg.#field_ident = self.#field_ident;
-                }
-            }
-        }
-    }
-}
-
 /// 生成 Rust 结构体定义的 TokenStream
 pub fn generate_rust_msg(module_: &str, prefix_: &str, name_: &str) -> proc_macro2::TokenStream {
     let key = format!("{}__{}__{}", module_, prefix_, name_);
@@ -613,7 +431,6 @@ pub fn generate_rust_msg(module_: &str, prefix_: &str, name_: &str) -> proc_macr
 
     // 当前成员的名称和类型
     let name_ident = format_ident!("{name}");
-    let c_struct_ident = format_ident!("{}__{}__{}", module, prefix, name);
 
     // 生成字段定义、from_native 和 copy_to_native 转换代码
     let members_data: Vec<_> = members
@@ -621,75 +438,9 @@ pub fn generate_rust_msg(module_: &str, prefix_: &str, name_: &str) -> proc_macr
         // 过滤掉 ROS2 中自动添加的占位成员
         .filter(|m| m.rust_name() != "structure_needs_at_least_one_member")
         .map(|member| {
-            let fields = generate_struct_field(&member);
-            let from_native = generate_from_native_field(&member);
-            let copy_to_native = generate_copy_to_native_field(&member);
-            (fields, from_native, copy_to_native)
+            generate_struct_field(&member)
         })
         .collect();
-
-    let fields_vec: Vec<_> = members_data.iter().map(|(f, _, _)| f).collect();
-    let from_native_vec: Vec<_> = members_data.iter().map(|(_, fn_code, _)| fn_code).collect();
-    let copy_to_native_vec: Vec<_> = members_data
-        .iter()
-        .map(|(_, _, ctn_code)| ctn_code)
-        .collect();
-
-    // 生成 Rust 结构体定义
-    let fields = quote! { #(#fields_vec),* };
-    let from_native_fields = quote! { #(#from_native_vec)* };
-    let copy_to_native_fields = quote! { #(#copy_to_native_vec)* };
-
-    // 生成类型支持包装实现
-    let ts_wrapper = {
-        let type_support_handle = format_ident!(
-            "rosidl_typesupport_c__get_message_type_support_handle__{c_struct_ident}"
-        );
-        let create_func = format_ident!("{c_struct_ident}__create");
-        let destroy_func = format_ident!("{c_struct_ident}__destroy");
-
-        quote! {
-            impl TypesupportWrapper for #name_ident {
-                type CStruct = #c_struct_ident;
-
-                fn get_ts() -> &'static rosidl_message_type_support_t {
-                    unsafe {
-                        &* #type_support_handle()
-                    }
-                }
-
-                fn create_msg() -> *mut Self::CStruct {
-                    unsafe {
-                        #create_func ()
-                    }
-                }
-
-                fn destroy_msg(msg: *mut Self::CStruct) -> () {
-                    unsafe {
-                        #destroy_func (msg)
-                    }
-                }
-
-                fn from_native(#[allow(unused)] msg: &Self::CStruct) -> #name_ident {
-                    #name_ident {
-                        #from_native_fields
-                    }
-                }
-                fn copy_to_native(&self, #[allow(unused)] msg: &mut Self::CStruct) {
-                    #copy_to_native_fields
-                }
-            }
-        }
-    };
-
-    let impl_default = quote! {
-        impl Default for #name_ident {
-            fn default() -> Self {
-                let msg_native = NativeMsgWrapper::< #name_ident >::new();
-                #name_ident :: from_native(&msg_native)
-            }
-        }
-    };
 
     let constant_items: Vec<_> = CONSTANTS_MAP
         .get(&key)
@@ -729,12 +480,10 @@ pub fn generate_rust_msg(module_: &str, prefix_: &str, name_: &str) -> proc_macr
         #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
         #[serde(default)]
         pub struct #name_ident {
-            #fields
+            #(#members_data),*
         }
 
         #impl_constants
-        #impl_default
-        #ts_wrapper
     }
 }
 
@@ -766,4 +515,29 @@ pub fn generate_rust_service(
         }
 
     )
+}
+
+pub fn generate_rust_action(module_: &str, prefix_: &str, name_: &str) -> proc_macro2::TokenStream {
+    let ident = format_ident!(
+        "rosidl_typesupport_c__\
+         get_action_type_support_handle__\
+         {module_}__\
+         {prefix_}__\
+         {name_}"
+    );
+
+    quote! {
+        #[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
+        pub struct Action();
+        impl WrappedActionTypeSupport for Action {
+            type Goal = Goal;
+            type Result = Result;
+            type Feedback = Feedback;
+
+            // internal structs
+            type FeedbackMessage = FeedbackMessage;
+            type SendGoal = SendGoal::Service;
+            type GetResult = GetResult::Service;
+        }
+    }
 }

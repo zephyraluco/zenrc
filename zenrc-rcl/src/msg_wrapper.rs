@@ -12,7 +12,7 @@ use crate::{rosidl_message_type_support_t, rosidl_service_type_support_t};
 /// - 获取类型支持句柄
 /// - 创建和销毁原生消息
 /// - 在 Rust 类型和原生 C 类型之间转换
-pub trait TypesupportWrapper
+pub trait TypeSupportWrapper
 where
     Self: Sized,
 {
@@ -33,6 +33,12 @@ where
 
     /// 将 Rust 类型复制到原生 C 结构体
     fn copy_to_native(&self, msg: &mut Self::CStruct);
+
+    // /// 将消息序列化为字节
+    // fn serialize(&self) -> Vec<u8>;
+
+    // /// 从字节反序列化为消息
+    // fn deserialize(data: &[u8]) -> Self;
 }
 
 /// ROS2 服务类型支持的包装 trait
@@ -40,9 +46,9 @@ where
 /// 为 ROS2 服务类型提供统一的类型支持接口
 pub trait ServiceTypeSupportWrapper {
     /// 服务请求类型
-    type Request: TypesupportWrapper;
+    type Request: TypeSupportWrapper;
     /// 服务响应类型
-    type Response: TypesupportWrapper;
+    type Response: TypeSupportWrapper;
 
     /// 获取服务类型支持句柄
     fn get_ts() -> &'static rosidl_service_type_support_t;
@@ -51,14 +57,14 @@ pub trait ServiceTypeSupportWrapper {
 /// 原生消息的 RAII 包装器
 ///
 /// 自动管理原生 ROS2 消息的生命周期，在创建时分配内存，在销毁时释放内存
-pub struct NativeMsgWrapper<T: TypesupportWrapper> {
+pub struct NativeMsg<T: TypeSupportWrapper> {
     msg: *mut T::CStruct,
 }
 
 /// 基本方法实现
 ///
 /// 提供创建消息实例和获取指针的核心功能
-impl<T: TypesupportWrapper> NativeMsgWrapper<T> {
+impl<T: TypeSupportWrapper> NativeMsg<T> {
     pub fn new() -> Self {
         Self {
             msg: T::create_msg(),
@@ -77,7 +83,7 @@ impl<T: TypesupportWrapper> NativeMsgWrapper<T> {
 /// Default trait 实现
 ///
 /// 提供默认构造方式，等同于调用 `new()`
-impl<T: TypesupportWrapper> Default for NativeMsgWrapper<T> {
+impl<T: TypeSupportWrapper> Default for NativeMsg<T> {
     fn default() -> Self {
         Self::new()
     }
@@ -87,7 +93,7 @@ impl<T: TypesupportWrapper> Default for NativeMsgWrapper<T> {
 ///
 /// 允许通过 `*` 运算符或方法调用语法直接访问底层 C 结构体的字段。
 /// 这使得可以像使用普通引用一样使用包装器。
-impl<T: TypesupportWrapper> Deref for NativeMsgWrapper<T> {
+impl<T: TypeSupportWrapper> Deref for NativeMsg<T> {
     type Target = T::CStruct;
 
     fn deref(&self) -> &Self::Target {
@@ -99,7 +105,7 @@ impl<T: TypesupportWrapper> Deref for NativeMsgWrapper<T> {
 ///
 /// 允许通过可变引用修改底层 C 结构体的字段。
 /// 配合 Deref 实现，提供完整的字段访问能力。
-impl<T: TypesupportWrapper> DerefMut for NativeMsgWrapper<T> {
+impl<T: TypeSupportWrapper> DerefMut for NativeMsg<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut *self.msg }
     }
@@ -109,7 +115,7 @@ impl<T: TypesupportWrapper> DerefMut for NativeMsgWrapper<T> {
 ///
 /// 实现 RAII 模式，在包装器离开作用域时自动释放原生消息内存。
 /// 这确保了即使发生 panic 或提前返回，内存也能被正确清理。
-impl<T: TypesupportWrapper> Drop for NativeMsgWrapper<T> {
+impl<T: TypeSupportWrapper> Drop for NativeMsg<T> {
     fn drop(&mut self) {
         if !self.msg.is_null() {
             T::destroy_msg(self.msg);
@@ -118,7 +124,7 @@ impl<T: TypesupportWrapper> Drop for NativeMsgWrapper<T> {
 }
 
 /// Send trait 实现
-unsafe impl<T: TypesupportWrapper> Send for NativeMsgWrapper<T> where T: Send {}
+unsafe impl<T: TypeSupportWrapper> Send for NativeMsg<T> where T: Send {}
 
 /// Sync trait 实现
-unsafe impl<T: TypesupportWrapper> Sync for NativeMsgWrapper<T> where T: Sync {}
+unsafe impl<T: TypeSupportWrapper> Sync for NativeMsg<T> where T: Sync {}

@@ -1,7 +1,6 @@
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::ptr;
 use zenrc_rcl::*;
-use zenrc_rcl::generated::std_msgs::msg::String as StdString;
 
 fn main() {
     unsafe {
@@ -32,7 +31,7 @@ fn main() {
         }
 
         // 获取 std_msgs::String 的类型支持
-        let type_support = StdString::get_ts();
+        let type_support = rosidl_typesupport_c__get_message_type_support_handle__std_msgs__msg__String();
 
         // 创建订阅者
         let mut subscription = rcl_get_zero_initialized_subscription();
@@ -79,16 +78,24 @@ fn main() {
             if ret == 0 {
                 // 检查订阅者是否有消息
                 if !wait_set.subscriptions.is_null() && *wait_set.subscriptions != ptr::null() {
-                    // 创建原生消息包装器来接收数据
-                    let mut native_msg = NativeMsgWrapper::<StdString>::new();
+                    // 创建消息来接收数据
+                    let msg = std_msgs__msg__String__create();
+                    if msg.is_null() {
+                        eprintln!("Failed to create message");
+                        continue;
+                    }
+
                     let mut message_info: rmw_message_info_t = std::mem::zeroed();
 
-                    if rcl_take(&subscription, native_msg.as_mut_ptr() as *mut _, &mut message_info, ptr::null_mut()) == 0 {
-                        // 从原生消息转换为 Rust 类型
-                        let rust_msg = StdString::from_native(&native_msg);
-                        println!("Received: {}", rust_msg.data);
+                    if rcl_take(&subscription, msg as *mut _, &mut message_info, ptr::null_mut()) == 0 {
+                        // 读取字符串内容
+                        let content = CStr::from_ptr((*msg).data.data);
+                        let content_str = content.to_str().unwrap_or("");
+                        println!("Received: {}", content_str);
                     }
-                    // native_msg 会在作用域结束时自动释放
+
+                    // 销毁消息
+                    std_msgs__msg__String__destroy(msg);
                 }
             } else if ret != RCL_RET_TIMEOUT as i32 {
                 eprintln!("Wait failed with error code: {}", ret);

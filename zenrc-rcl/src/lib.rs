@@ -7,9 +7,84 @@ include!(concat!(env!("OUT_DIR"), "/introspection_maps.rs"));
 
 mod rust_types;
 mod msg_wrapper;
-pub mod generated;
+// pub mod generated;
 
-pub use msg_wrapper::{TypesupportWrapper, NativeMsgWrapper, ServiceTypeSupportWrapper};
+use msg_wrapper::{TypeSupportWrapper, NativeMsg, ServiceTypeSupportWrapper};
+
+
+macro_rules! primitive_sequence {
+    ($ctype:ident, $element_type:ident) => {
+        paste::item! {
+            // 拼接生成新的类型名称，如 rosidl_runtime_c__float32__Sequence
+            impl [<$ctype __Sequence>] {
+                /// 从 Rust 切片更新序列内容
+                ///
+                /// 此方法会先释放现有序列，然后重新初始化并复制新数据。
+                ///
+                /// # 参数
+                ///
+                /// * `values` - 要复制到序列中的 Rust 切片
+                ///
+                /// # Safety
+                ///
+                /// 内部使用 unsafe 代码调用 ROS2 C API 的 fini/init 函数和内存复制
+                pub fn update(&mut self, values: &[$element_type]) {
+                    // 释放现有序列
+                    unsafe { [<$ctype __Sequence__fini>] (self as *mut _); }
+                    // 重新初始化序列，分配新的内存
+                    unsafe { [<$ctype __Sequence__init>] (self as *mut _, values.len()); }
+                    // 如果内存分配成功，复制数据
+                    if self.data != std::ptr::null_mut() {
+                        unsafe { std::ptr::copy_nonoverlapping(values.as_ptr(), self.data, values.len()); }
+                    }
+                }
+
+                /// 将序列转换为 Rust Vec
+                ///
+                /// 此方法会复制序列中的所有元素到一个新的 Vec 中。
+                ///
+                /// # 返回值
+                ///
+                /// 包含序列所有元素的 Vec。如果序列为空或未初始化，返回空 Vec。
+                ///
+                /// # Safety
+                ///
+                /// 内部使用 unsafe 代码进行内存复制
+                pub fn to_vec(&self) -> Vec<$element_type> {
+                    // 如果序列未初始化，返回空 Vec
+                    if self.data == std::ptr::null_mut() {
+                        return Vec::new();
+                    }
+                    // 预分配足够的容量
+                    let mut target = Vec::with_capacity(self.size);
+                    unsafe {
+                        // 从 C 序列复制数据到 Vec
+                        std::ptr::copy_nonoverlapping(self.data, target.as_mut_ptr(), self.size);
+                        // 设置 Vec 的长度
+                        target.set_len(self.size);
+                    }
+                    target
+                }
+            }
+        }
+    };
+}
+primitive_sequence!(rosidl_runtime_c__float32, f32);
+primitive_sequence!(rosidl_runtime_c__float64, f64);
+primitive_sequence!(rosidl_runtime_c__long_double, u128);
+primitive_sequence!(rosidl_runtime_c__char, i8);
+primitive_sequence!(rosidl_runtime_c__wchar, u16);
+primitive_sequence!(rosidl_runtime_c__boolean, bool);
+primitive_sequence!(rosidl_runtime_c__octet, u8);
+primitive_sequence!(rosidl_runtime_c__uint8, u8);
+primitive_sequence!(rosidl_runtime_c__int8, i8);
+primitive_sequence!(rosidl_runtime_c__uint16, u16);
+primitive_sequence!(rosidl_runtime_c__int16, i16);
+primitive_sequence!(rosidl_runtime_c__uint32, u32);
+primitive_sequence!(rosidl_runtime_c__int32, i32);
+primitive_sequence!(rosidl_runtime_c__uint64, u64);
+primitive_sequence!(rosidl_runtime_c__int64, i64);
+
 
 // 测试
 #[cfg(test)]
