@@ -194,7 +194,7 @@ mod tests {
             // 生成 pub mod msg { ... }
             if let Some(msg_codes) = msg_modules.get(module) {
                 let combined = msg_codes.join("\n\n");
-                module_code.push_str(&format!("pub mod msg {{\n{}\n}}\n\n", combined));
+                module_code.push_str(&format!("pub mod msg {{use super::*;\n{}\n}}\n\n", combined));
             }
 
             // 生成 pub mod srv { pub mod ServiceName { ... } ... }
@@ -216,7 +216,7 @@ mod tests {
                     ));
                 }
                 module_code.push_str(&format!(
-                    "pub mod srv {{\n{}\n}}\n",
+                    "pub mod srv {{use super::*;\n{}\n}}\n",
                     svc_mod_items.join("\n\n")
                 ));
             }

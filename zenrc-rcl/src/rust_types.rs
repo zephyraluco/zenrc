@@ -658,13 +658,13 @@ pub fn generate_rust_msg(module_: &str, prefix_: &str, name_: &str) -> proc_macr
                     }
                 }
 
-                fn create_msg() -> *mut CStruct {
+                fn create_msg() -> *mut Self::CStruct {
                     unsafe {
                         #create_func ()
                     }
                 }
 
-                fn destroy_msg(msg: *mut CStruct) -> () {
+                fn destroy_msg(msg: *mut Self::CStruct) -> () {
                     unsafe {
                         #destroy_func (msg)
                     }
