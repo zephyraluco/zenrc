@@ -1,7 +1,8 @@
 use std::ffi::CString;
 use std::ptr;
-use zenrc_rcl::*;
-use zenrc_rcl::generated::std_msgs::msg::String as StdString;
+
+// use zenrc_rcl::generated_types::std_msgs::msg::String as RosString;
+use zenrc_rcl::std_msgs::msg::String as RosString;
 
 fn main() {
     unsafe {
@@ -25,21 +26,35 @@ fn main() {
         let namespace = CString::new("").unwrap();
         let node_options = rcl_node_get_default_options();
 
-        if rcl_node_init(&mut node, node_name.as_ptr(), namespace.as_ptr(), &mut context, &node_options) != 0 {
+        if rcl_node_init(
+            &mut node,
+            node_name.as_ptr(),
+            namespace.as_ptr(),
+            &mut context,
+            &node_options,
+        ) != 0
+        {
             eprintln!("Failed to create node");
             rcl_shutdown(&mut context);
             return;
         }
 
         // 获取 std_msgs::String 的类型支持
-        let type_support = StdString::get_ts();
+        let type_support = RosString::get_ts();
 
         // 创建发布者
         let mut publisher = rcl_get_zero_initialized_publisher();
         let topic_name = CString::new("chatter").unwrap();
         let publisher_options = rcl_publisher_get_default_options();
 
-        if rcl_publisher_init(&mut publisher, &node, type_support, topic_name.as_ptr(), &publisher_options) != 0 {
+        if rcl_publisher_init(
+            &mut publisher,
+            &node,
+            type_support,
+            topic_name.as_ptr(),
+            &publisher_options,
+        ) != 0
+        {
             eprintln!("Failed to create publisher");
             rcl_node_fini(&mut node);
             rcl_shutdown(&mut context);
@@ -52,12 +67,12 @@ fn main() {
         let mut count = 0u32;
         loop {
             // 创建 Rust 消息
-            let rust_msg = StdString {
+            let rust_msg = RosString {
                 data: format!("Hello World: {}", count),
             };
 
             // 创建原生消息包装器并复制数据
-            let mut native_msg = NativeMsgWrapper::<StdString>::new();
+            let mut native_msg = NativeMsg::<RosString>::new();
             rust_msg.copy_to_native(&mut native_msg);
 
             // 发布消息

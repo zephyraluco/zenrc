@@ -1,7 +1,8 @@
 use std::ffi::CString;
 use std::ptr;
+
+use zenrc_rcl::generated_types::std_msgs::msg::String as RosString;
 use zenrc_rcl::*;
-use zenrc_rcl::generated::std_msgs::msg::String as StdString;
 
 fn main() {
     unsafe {
@@ -25,21 +26,35 @@ fn main() {
         let namespace = CString::new("").unwrap();
         let node_options = rcl_node_get_default_options();
 
-        if rcl_node_init(&mut node, node_name.as_ptr(), namespace.as_ptr(), &mut context, &node_options) != 0 {
+        if rcl_node_init(
+            &mut node,
+            node_name.as_ptr(),
+            namespace.as_ptr(),
+            &mut context,
+            &node_options,
+        ) != 0
+        {
             eprintln!("Failed to create node");
             rcl_shutdown(&mut context);
             return;
         }
 
         // 获取 std_msgs::String 的类型支持
-        let type_support = StdString::get_ts();
+        let type_support = RosString::get_ts();
 
         // 创建订阅者
         let mut subscription = rcl_get_zero_initialized_subscription();
         let topic_name = CString::new("chatter").unwrap();
         let subscription_options = rcl_subscription_get_default_options();
 
-        if rcl_subscription_init(&mut subscription, &node, type_support, topic_name.as_ptr(), &subscription_options) != 0 {
+        if rcl_subscription_init(
+            &mut subscription,
+            &node,
+            type_support,
+            topic_name.as_ptr(),
+            &subscription_options,
+        ) != 0
+        {
             eprintln!("Failed to create subscription");
             rcl_node_fini(&mut node);
             rcl_shutdown(&mut context);
@@ -50,7 +65,18 @@ fn main() {
 
         // 创建等待集
         let mut wait_set = rcl_get_zero_initialized_wait_set();
-        if rcl_wait_set_init(&mut wait_set, 1, 0, 0, 0, 0, 0, &mut context, rcutils_get_default_allocator()) != 0 {
+        if rcl_wait_set_init(
+            &mut wait_set,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            &mut context,
+            rcutils_get_default_allocator(),
+        ) != 0
+        {
             eprintln!("Failed to create wait set");
             rcl_subscription_fini(&mut subscription, &mut node);
             rcl_node_fini(&mut node);
@@ -80,12 +106,18 @@ fn main() {
                 // 检查订阅者是否有消息
                 if !wait_set.subscriptions.is_null() && *wait_set.subscriptions != ptr::null() {
                     // 创建原生消息包装器来接收数据
-                    let mut native_msg = NativeMsgWrapper::<StdString>::new();
+                    let mut native_msg = NativeMsg::<RosString>::new();
                     let mut message_info: rmw_message_info_t = std::mem::zeroed();
 
-                    if rcl_take(&subscription, native_msg.as_mut_ptr() as *mut _, &mut message_info, ptr::null_mut()) == 0 {
+                    if rcl_take(
+                        &subscription,
+                        native_msg.as_mut_ptr() as *mut _,
+                        &mut message_info,
+                        ptr::null_mut(),
+                    ) == 0
+                    {
                         // 从原生消息转换为 Rust 类型
-                        let rust_msg = StdString::from_native(&native_msg);
+                        let rust_msg = RosString::from_native(&native_msg);
                         println!("Received: {}", rust_msg.data);
                     }
                     // native_msg 会在作用域结束时自动释放

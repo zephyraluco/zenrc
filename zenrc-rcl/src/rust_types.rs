@@ -649,7 +649,7 @@ pub fn generate_rust_msg(module_: &str, prefix_: &str, name_: &str) -> proc_macr
         let destroy_func = format_ident!("{c_struct_ident}__destroy");
 
         quote! {
-            impl TypesupportWrapper for #name_ident {
+            impl TypeSupportWrapper for #name_ident {
                 type CStruct = #c_struct_ident;
 
                 fn get_ts() -> &'static rosidl_message_type_support_t {
@@ -685,7 +685,7 @@ pub fn generate_rust_msg(module_: &str, prefix_: &str, name_: &str) -> proc_macr
     let impl_default = quote! {
         impl Default for #name_ident {
             fn default() -> Self {
-                let msg_native = NativeMsgWrapper::< #name_ident >::new();
+                let msg_native = NativeMsg::< #name_ident >::new();
                 #name_ident :: from_native(&msg_native)
             }
         }
@@ -766,4 +766,50 @@ pub fn generate_rust_service(
         }
 
     )
+}
+
+/// 生成一个 Rust 源文件，将 `generated_types/` 目录下所有 `.rs` 文件以
+/// `pub mod <package_name> { use super::*; include!(...); }` 的形式包含进来。
+///
+/// 返回生成文件的完整内容字符串（已通过 prettyplease 格式化）。
+///
+/// # 参数
+/// * `generated_types_dir` - `generated_types/` 目录路径
+///
+/// # 错误
+/// 如果目录读取失败或文件写入失败则 panic。
+pub fn generate_types_mod(generated_types_dir: &std::path::Path) -> String {
+    use std::fmt::Write as _;
+
+    // 收集所有 .rs 文件名（排除 mod.rs 自身），排序以保证确定性
+    let mut modules: Vec<String> = std::fs::read_dir(generated_types_dir)
+        .expect("无法读取 generated_types 目录")
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            if name.ends_with(".rs") && name != "mod.rs" {
+                Some(name.trim_end_matches(".rs").to_owned())
+            } else {
+                None
+            }
+        })
+        .collect();
+    modules.sort();
+
+    // 拼接源码：每个包一个 pub mod 块，内部用 include! 引入对应文件
+    let mut source = String::new();
+    for module in &modules {
+        writeln!(
+            source,
+            "pub mod {module} {{\n    use super::*;\n    use serde::{{Deserialize, Serialize}};\n    include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/generated_types/{module}.rs\"));\n}}"
+        )
+        .unwrap();
+    }
+
+    // 用 prettyplease 格式化，失败时保留原始代码
+    match syn::parse_file(&source) {
+        Ok(tree) => prettyplease::unparse(&tree),
+        Err(_) => source,
+    }
 }

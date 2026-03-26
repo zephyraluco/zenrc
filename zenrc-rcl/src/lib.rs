@@ -5,11 +5,196 @@
 include!(concat!(env!("OUT_DIR"), "/rcl_bindings.rs"));
 include!(concat!(env!("OUT_DIR"), "/introspection_maps.rs"));
 
-mod rust_types;
 mod msg_wrapper;
-pub mod generated;
+mod rust_types;
+use std::ffi::{CStr, CString};
 
-pub use msg_wrapper::{TypesupportWrapper, NativeMsgWrapper, ServiceTypeSupportWrapper};
+pub use msg_wrapper::{NativeMsg, ServiceTypeSupportWrapper, TypeSupportWrapper};
+
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/generated_types/mod.rs"));
+// pub mod builtin_interfaces {
+//     use super::*;
+//     use serde::{Deserialize, Serialize};
+//     include!(
+//         concat!(env!("CARGO_MANIFEST_DIR"), "/generated_types/builtin_interfaces.rs")
+//     );
+// }
+// pub mod std_msgs {
+//     use super::*;
+//     use serde::{Deserialize, Serialize};
+//     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/generated_types/std_msgs.rs"));
+// }
+
+// pub mod generated_types {
+//     use serde::{Deserialize, Serialize};
+
+//     use super::*;
+
+//     pub mod builtin_interfaces {
+//         use super::*;
+//         include!(concat!(
+//             env!("CARGO_MANIFEST_DIR"),
+//             "/generated_types/builtin_interfaces.rs"
+//         ));
+//     }
+
+//     pub mod std_msgs {
+//         use super::*;
+//         include!(concat!(
+//             env!("CARGO_MANIFEST_DIR"),
+//             "/generated_types/std_msgs.rs"
+//         ));
+//     }
+// }
+
+macro_rules! primitive_sequence {
+    ($ctype:ident, $element_type:ident) => {
+        paste::item! {
+            // 拼接生成新的类型名称，如 rosidl_runtime_c__float32__Sequence
+            impl [<$ctype __Sequence>] {
+                /// 从 Rust 切片更新序列内容
+                /// 此方法会先释放现有序列，然后重新初始化并复制新数据。
+                ///
+                /// # 参数
+                /// * `values` - 要复制到序列中的 Rust 切片
+                pub fn update(&mut self, values: &[$element_type]) {
+                    // 释放现有序列
+                    unsafe { [<$ctype __Sequence__fini>] (self as *mut _); }
+                    // 重新初始化序列，分配新的内存
+                    unsafe { [<$ctype __Sequence__init>] (self as *mut _, values.len()); }
+                    // 如果内存分配成功，复制数据
+                    if self.data != std::ptr::null_mut() {
+                        unsafe { std::ptr::copy_nonoverlapping(values.as_ptr(), self.data, values.len()); }
+                    }
+                }
+
+                /// 将序列转换为 Rust Vec
+                /// 此方法会复制序列中的所有元素到一个新的 Vec 中。
+                ///
+                /// # 返回值
+                /// 包含序列所有元素的 Vec。如果序列为空或未初始化，返回空 Vec。
+                pub fn to_vec(&self) -> Vec<$element_type> {
+                    // 如果序列未初始化，返回空 Vec
+                    if self.data == std::ptr::null_mut() {
+                        return Vec::new();
+                    }
+                    // 预分配足够的容量
+                    let mut target = Vec::with_capacity(self.size);
+                    unsafe {
+                        // 从 C 序列复制数据到 Vec
+                        std::ptr::copy_nonoverlapping(self.data, target.as_mut_ptr(), self.size);
+                        // 设置 Vec 的长度
+                        target.set_len(self.size);
+                    }
+                    target
+                }
+            }
+        }
+    };
+}
+primitive_sequence!(rosidl_runtime_c__float32, f32);
+primitive_sequence!(rosidl_runtime_c__float64, f64);
+primitive_sequence!(rosidl_runtime_c__long_double, u128);
+primitive_sequence!(rosidl_runtime_c__char, i8);
+primitive_sequence!(rosidl_runtime_c__wchar, u16);
+primitive_sequence!(rosidl_runtime_c__boolean, bool);
+primitive_sequence!(rosidl_runtime_c__octet, u8);
+primitive_sequence!(rosidl_runtime_c__uint8, u8);
+primitive_sequence!(rosidl_runtime_c__int8, i8);
+primitive_sequence!(rosidl_runtime_c__uint16, u16);
+primitive_sequence!(rosidl_runtime_c__int16, i16);
+primitive_sequence!(rosidl_runtime_c__uint32, u32);
+primitive_sequence!(rosidl_runtime_c__int32, i32);
+primitive_sequence!(rosidl_runtime_c__uint64, u64);
+primitive_sequence!(rosidl_runtime_c__int64, i64);
+
+impl rosidl_runtime_c__String {
+    pub fn to_str(&self) -> &str {
+        let s = unsafe { CStr::from_ptr(self.data) };
+        s.to_str().expect("Invalid UTF-8 string")
+    }
+
+    pub fn assign(&mut self, data: &str) {
+        let q = CString::new(data).unwrap();
+        unsafe {
+            // 将 C 字符串的内容复制到 rosidl_runtime_c__String 结构体中
+            rosidl_runtime_c__String__assign(self, q.as_ptr());
+        }
+    }
+}
+//TODO: rosidl_runtime_c__U16String 需要处理 UTF-16 编码
+impl rosidl_runtime_c__U16String {
+    pub fn to_str(&self) -> String {
+        let slice = unsafe { std::slice::from_raw_parts(self.data, self.size) };
+        String::from_utf16_lossy(slice)
+    }
+
+    pub fn assign(&mut self, data: &str) {
+        // 将 Rust 字符串转换为 UTF-16（含结尾 0）并复制到 rosidl_runtime_c__U16String
+        let utf16: Vec<u16> = data.encode_utf16().collect();
+        unsafe {
+            rosidl_runtime_c__U16String__assignn(self, utf16.as_ptr(), utf16.len());
+        }
+    }
+}
+
+impl rosidl_runtime_c__U16String__Sequence {
+    pub fn update(&mut self, values: &[String]) {
+        unsafe {
+            rosidl_runtime_c__U16String__Sequence__fini(self as *mut _);
+        }
+        unsafe {
+            rosidl_runtime_c__U16String__Sequence__init(self as *mut _, values.len());
+        }
+        if self.data != std::ptr::null_mut() {
+            let strs = unsafe { std::slice::from_raw_parts_mut(self.data, values.len()) };
+            for (target, source) in strs.iter_mut().zip(values) {
+                target.assign(source);
+            }
+        }
+    }
+
+    pub fn to_vec(&self) -> Vec<String> {
+        if self.data == std::ptr::null_mut() {
+            return Vec::new();
+        }
+        let mut target = Vec::with_capacity(self.size);
+        let strs = unsafe { std::slice::from_raw_parts(self.data, self.size) };
+        for s in strs {
+            target.push(s.to_str().to_owned());
+        }
+        target
+    }
+}
+
+impl rosidl_runtime_c__String__Sequence {
+    pub fn update(&mut self, values: &[String]) {
+        unsafe {
+            rosidl_runtime_c__String__Sequence__fini(self as *mut _);
+        }
+        unsafe {
+            rosidl_runtime_c__String__Sequence__init(self as *mut _, values.len());
+        }
+        if self.data != std::ptr::null_mut() {
+            let strs = unsafe { std::slice::from_raw_parts_mut(self.data, values.len()) };
+            for (target, source) in strs.iter_mut().zip(values) {
+                target.assign(source);
+            }
+        }
+    }
+
+    pub fn to_vec(&self) -> Vec<String> {
+        if self.data == std::ptr::null_mut() {
+            return Vec::new();
+        }
+        let mut target = Vec::with_capacity(self.size);
+        let strs = unsafe { std::slice::from_raw_parts(self.data, self.size) };
+        for s in strs {
+            target.push(s.to_str().to_owned());
+        }
+        target
+    }
+}
 
 // 测试
 #[cfg(test)]
@@ -194,7 +379,10 @@ mod tests {
             // 生成 pub mod msg { ... }
             if let Some(msg_codes) = msg_modules.get(module) {
                 let combined = msg_codes.join("\n\n");
-                module_code.push_str(&format!("pub mod msg {{use super::*;\n{}\n}}\n\n", combined));
+                module_code.push_str(&format!(
+                    "pub mod msg {{use super::*;\n{}\n}}\n\n",
+                    combined
+                ));
             }
 
             // 生成 pub mod srv { pub mod ServiceName { ... } ... }
@@ -211,12 +399,12 @@ mod tests {
                             .map(|ts| ts.to_string())
                             .unwrap_or_default();
                     svc_mod_items.push(format!(
-                        "pub mod {} {{\n{}\n{}\n}}",
+                        "pub mod {} {{use super::super::*; \n{}\n{}\n}}",
                         svc_name, combined, service_code
                     ));
                 }
                 module_code.push_str(&format!(
-                    "pub mod srv {{use super::*;\n{}\n}}\n",
+                    "pub mod srv {{\n{}\n}}\n",
                     svc_mod_items.join("\n\n")
                 ));
             }
@@ -246,5 +434,26 @@ mod tests {
 
         assert_eq!(msg_failed, 0, "有 {} 个 msg 类型生成失败", msg_failed);
         assert!(written > 0, "没有生成任何文件");
+    }
+
+    /// 生成 generated_types/mod.rs，将所有已生成的类型文件统一 include 进来
+    #[test]
+    fn test_generate_types_mod() {
+        use crate::rust_types::generate_types_mod;
+
+        let generated_types_dir = Path::new("generated_types");
+        assert!(
+            generated_types_dir.exists(),
+            "generated_types 目录不存在，请先运行 test_generate_msg_and_srv_types"
+        );
+
+        let content = generate_types_mod(generated_types_dir);
+        let mod_path = generated_types_dir.join("mod.rs");
+        fs::write(&mod_path, &content).expect("无法写入 mod.rs");
+        println!("✓ 已生成: {}", mod_path.display());
+        println!("内容预览（前 20 行）:");
+        for line in content.lines().take(20) {
+            println!("  {}", line);
+        }
     }
 }
