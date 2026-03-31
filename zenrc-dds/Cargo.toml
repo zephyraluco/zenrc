@@ -9,4 +9,5 @@ edition = "2024"
 bindgen = "0.72"
 pkg-config = "0.3"
 cc = "1.0"
+sha2 = "0.11"
 

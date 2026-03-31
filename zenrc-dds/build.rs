@@ -1,5 +1,92 @@
-use std::{env, fs, path::{Path, PathBuf}, process::Command};
+use std::{env, fs::{self, OpenOptions}, path::{Path, PathBuf}, process::Command};
 
+use sha2::{Digest, Sha256};
+
+const ROS2_MSGS_LIB_NAME: &str = "ros2_msgs";
+/// 递归收集 dir 下所有 .c 文件的绝对路径。
+fn collect_c_files(dir: &Path) -> Vec<PathBuf> {
+    let mut result = Vec::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                result.extend(collect_c_files(&path));
+            } else if path.extension().map_or(false, |e| e == "c") {
+                result.push(path);
+            }
+        }
+    }
+    result
+}
+
+/// 编译 idlc 生成的所有 .c 文件并打包为静态库，供链接使用。
+fn compile_idl_c_files(dds: &pkg_config::Library, idl_out_dir: &Path) {
+    let c_files = collect_c_files(idl_out_dir);
+    if c_files.is_empty() {
+        return;
+    }
+
+    let out_dir: PathBuf = env::var_os("OUT_DIR").unwrap().into();
+
+    let mut build = cc::Build::new();
+    for inc in &dds.include_paths {
+        build.include(inc);
+    }
+    build.include(idl_out_dir);
+    for f in &c_files {
+        build.file(f);
+    }
+    build.compile(ROS2_MSGS_LIB_NAME);
+
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    println!("cargo:rustc-link-lib=static={ROS2_MSGS_LIB_NAME}");
+}
+
+const WATCHED_ENV_VARS: &[&str] = &[
+    "AMENT_PREFIX_PATH",
+    "CMAKE_PREFIX_PATH",
+    "CMAKE_IDL_PACKAGES",
+    "IDL_PACKAGE_FILTER",
+    "ROS_DISTRO",
+];
+fn touch(path: &Path) {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)
+            .unwrap_or_else(|_| panic!("Unable to create directory '{}'", dir.display()));
+    }
+    OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)
+        .unwrap_or_else(|_| panic!("Unable to create file '{}'", path.display()));
+}
+
+fn get_env_hash() -> String {
+    let mut hasher = Sha256::new();
+    for var in WATCHED_ENV_VARS {
+        hasher.update(var.as_bytes());
+        hasher.update("=");
+
+        if let Ok(value) = env::var(var) {
+            hasher.update(value);
+        }
+
+        hasher.update("\n");
+    }
+    let hash = hasher.finalize();
+    hash.iter().fold(String::with_capacity(64), |mut s, b| {
+        use std::fmt::Write;
+        write!(s, "{:02x}", b).unwrap();
+        s
+    })
+}
+
+fn print_cargo_watches() {
+    for var in WATCHED_ENV_VARS {
+        println!("cargo:rerun-if-env-changed={}", var);
+    }
+}
 fn main() {
     // 使用 pkg-config 查找 dds
     let dds = match pkg_config::Config::new().probe("CycloneDDS") {
@@ -8,18 +95,39 @@ fn main() {
             panic!("Failed to find CycloneDDS via pkg-config: {}", e);
         }
     };
-
-    // 告诉 cargo 链接库的位置
+    print_cargo_watches();
     for path in &dds.link_paths {
         println!("cargo:rustc-link-search=native={}", path.display());
     }
-
-    // 告诉 cargo 需要链接的库
     for lib in &dds.libs {
         println!("cargo:rustc-link-lib={}", lib);
     }
 
-    // 生成 Rust 绑定
+    let env_hash = get_env_hash();
+    let out_dir: PathBuf = env::var_os("OUT_DIR").unwrap().into();
+    let env_dir = out_dir.join(env_hash);
+    let mark_file = env_dir.join("done");
+    if !mark_file.exists() {
+        // 生成绑定文件
+        gen_bindings(&dds, &out_dir);
+        compile_ros2_idl_files(&dds, &env_dir);
+        gen_msg_bindings(&dds, &env_dir, &out_dir);
+        compile_idl_c_files(&dds, &env_dir);
+        // 创建标记文件，表示绑定文件已生成
+        touch(&mark_file);
+    } else {
+        println!("cargo:warning=Environment variables unchanged, skipping bindgen");
+        // 即使 mark 已存在，仍需告知 cargo 链接已编译的静态库
+        let lib_path = out_dir.join(format!("lib{ROS2_MSGS_LIB_NAME}.a"));
+        if lib_path.exists() {
+            println!("cargo:rustc-link-search=native={}", out_dir.display());
+            println!("cargo:rustc-link-lib=static={ROS2_MSGS_LIB_NAME}");
+        }
+    }
+}
+
+fn gen_bindings(dds: &pkg_config::Library,output: &Path) {
+    
     let bindings = bindgen::Builder::default()
         .header("wrapper.hpp")
         .clang_args(
@@ -37,24 +145,105 @@ fn main() {
         .expect("Unable to generate bindings");
 
     bindings
-        .write_to_file(PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("bindings.rs"))
+        .write_to_file(output.join("bindings.rs"))
         .expect("Couldn't write bindings!");
-    // 编译 ROS2 IDL 文件
-    compile_ros2_idl_file(&dds, &PathBuf::from(env::var("OUT_DIR").unwrap()));
 }
 
-/// 在 link_paths 中推导安装前缀，查找 idlc 可执行文件。
-/// 若未找到则回退到 PATH 中的 `idlc`。
-fn find_idlc(dds: &pkg_config::Library) -> PathBuf {
+/// 递归收集 dir 下所有 .h 文件的绝对路径。
+fn collect_h_files(dir: &Path) -> Vec<PathBuf> {
+    let mut result = Vec::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                result.extend(collect_h_files(&path));
+            } else if path.extension().map_or(false, |e| e == "h") {
+                result.push(path);
+            }
+        }
+    }
+    result
+}
+
+/// 为 idlc 生成的所有 .h 文件生成 Rust binding，只调用一次 bindgen，写入 out_dir/msg_bindings.rs。
+fn gen_msg_bindings(dds: &pkg_config::Library, idl_out_dir: &Path, out_dir: &Path) {
+    let h_files = collect_h_files(idl_out_dir);
+    if h_files.is_empty() {
+        return;
+    }
+
+    // 生成一个临时 wrapper 头文件，#include 所有生成的 .h
+    let wrapper_path = out_dir.join("msg_bindings_wrapper.h");
+    let includes: String = h_files
+        .iter()
+        .filter_map(|p| p.to_str())
+        .map(|s| format!("#include \"{s}\"\n"))
+        .collect();
+    if let Err(e) = fs::write(&wrapper_path, &includes) {
+        println!("cargo:warning=Failed to write wrapper header: {e}");
+        return;
+    }
+
+    // 构建 bindgen：allowlist_file 只保留 idl_out_dir 下定义的类型，屏蔽系统头文件噪声
+    let idl_dir_pattern: String = idl_out_dir
+        .to_str()
+        .unwrap_or("")
+        .chars()
+        .flat_map(|c| {
+            if r"\^$.|?*+()[]{}".contains(c) {
+                vec!['\\', c]
+            } else {
+                vec![c]
+            }
+        })
+        .collect();
+
+    let builder = bindgen::Builder::default()
+        .header(wrapper_path.to_str().unwrap())
+        .clang_args(dds.include_paths.iter().map(|p| format!("-I{}", p.display())))
+        .clang_arg(format!("-I{}", idl_out_dir.display()))
+        // 只保留 idl_out_dir 目录下文件中定义的符号，系统头文件内容自动过滤
+        .allowlist_file(format!("{idl_dir_pattern}/.*"))
+        // 精确屏蔽已在 bindings.rs 中定义的 DDS 核心类型，避免重复定义冲突
+        .blocklist_type("dds_key_.*")
+        .blocklist_type("dds_topic_.*")
+        .blocklist_type("dds_type_.*");
+
+    match builder.generate() {
+        Ok(b) => {
+            let out_path = out_dir.join("msg_bindings.rs");
+            if let Err(e) = b.write_to_file(&out_path) {
+                println!("cargo:warning=Failed to write {}: {e}", out_path.display());
+            }
+        }
+        Err(e) => println!("cargo:warning=bindgen failed for msg_bindings: {e}"),
+    }
+}
+
+/// 先检查 PATH 中是否有 idlc，若无则在 dds 的 link_paths 推导出的 bin 目录中查找。
+fn find_idlc(dds: &pkg_config::Library) -> Option<PathBuf> {
+    // 优先使用 PATH 中的 idlc
+    let which_cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
+    if let Ok(output) = Command::new(which_cmd).arg("idlc").output() {
+        if output.status.success() {
+            if let Ok(s) = std::str::from_utf8(&output.stdout) {
+                let path = PathBuf::from(s.lines().next().unwrap_or("").trim());
+                if path.exists() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    // 在 dds 的 link_paths 推导出的 bin 目录中查找 idlc
     for link_path in &dds.link_paths {
         if let Some(prefix) = link_path.parent() {
             let candidate = prefix.join("bin").join("idlc");
             if candidate.exists() {
-                return candidate;
+                return Some(candidate);
             }
         }
     }
-    PathBuf::from("idlc")
+    None
 }
 
 /// 收集系统中所有已安装的 ROS2 消息包
@@ -125,7 +314,7 @@ pub fn collect_ros_msgs() -> Vec<String> {
     msgs
 }
 
-fn compile_ros2_idl_file(dds: &pkg_config::Library, out_dir: &Path) {
+fn compile_ros2_idl_files(dds: &pkg_config::Library, out_dir: &Path) {
     let split_char = if cfg!(target_os = "windows") { ';' } else { ':' };
 
     // 构建完整的 ament 前缀路径列表：AMENT_PREFIX_PATH + CMAKE_PREFIX_PATH
@@ -140,7 +329,10 @@ fn compile_ros2_idl_file(dds: &pkg_config::Library, out_dir: &Path) {
     // 获取所有 ROS2 消息相对路径，格式为 "pkg_name/msg/Name.idl"
     let msgs = collect_ros_msgs();
 
-    let idlc = find_idlc(dds);
+    let Some(idlc) = find_idlc(dds) else {
+        println!("cargo:warning=idlc not found, skipping IDL compilation");
+        return;
+    };
 
     // 遍历所有前缀路径，拼接 share/<msg>，存在则用 idlc 编译到 OUT_DIR
     for prefix in &prefix_dirs {

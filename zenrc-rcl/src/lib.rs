@@ -11,7 +11,7 @@ use std::ffi::{CStr, CString};
 
 pub use msg_wrapper::{NativeMsg, ServiceTypeSupportWrapper, TypeSupportWrapper};
 
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/generated_types/mod.rs"));
+// include!(concat!(env!("CARGO_MANIFEST_DIR"), "/generated_types/mod.rs"));
 // pub mod builtin_interfaces {
 //     use super::*;
 //     use serde::{Deserialize, Serialize};
