@@ -10,4 +10,8 @@ bindgen = "0.72"
 pkg-config = "0.3"
 cc = "1.0"
 sha2 = "0.11"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+prettyplease = "0.2"
 
