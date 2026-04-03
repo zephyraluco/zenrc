@@ -4,7 +4,7 @@
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 include!(concat!(env!("OUT_DIR"), "/msg_bindings.rs"));
-include!(concat!(env!("OUT_DIR"), "/safe_types.rs"));
+include!(concat!(env!("OUT_DIR"), "/generate_types.rs"));
 
 #[cfg(test)]
 mod tests {

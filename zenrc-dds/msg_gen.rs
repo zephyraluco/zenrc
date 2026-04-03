@@ -8,6 +8,8 @@ use quote::{format_ident, quote};
 const PRIMS: &[&str] = &[
     "bool", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64",
 ];
+const MSG_BINDINGS_FILE: &str = "msg_bindings.rs";
+const WARPPER_TYPES_FILE: &str = "generate_types.rs";
 
 #[derive(Clone)]
 enum SeqType {
@@ -418,23 +420,25 @@ fn generate_into_raw(key: &str, ty: &CFieldType) -> TokenStream {
     }
 }
 /// 生成单个消息类型的安全包装代码，包括结构体定义和 From/Into 实现
-fn gen_item_wrapper(s: &MsgStruct, name_ident: proc_macro2::Ident) -> TokenStream {
+fn generate_item_wrapper(s: &MsgStruct, name_ident: proc_macro2::Ident) -> TokenStream {
     let c_name_ident = format_ident!("{}_{}_{}", s.pkg, s.prefix, s.name);
-    let fields_ts: Vec<TokenStream> = s
+    let (fields_ts, from_fields, into_stmts): (Vec<TokenStream>, Vec<TokenStream>, Vec<TokenStream>) = s
         .fields
         .iter()
-        .map(|(fname, kind)| generate_struct_field(fname, kind))
-        .collect();
-    let from_fields: Vec<TokenStream> = s
-        .fields
-        .iter()
-        .map(|(fname, kind)| generate_from_raw(fname, kind))
-        .collect();
-    let into_stmts: Vec<TokenStream> = s
-        .fields
-        .iter()
-        .map(|(fname, kind)| generate_into_raw(fname, kind))
-        .collect();
+        .map(|(fname, kind)| (
+            generate_struct_field(fname, kind),
+            generate_from_raw(fname, kind),
+            generate_into_raw(fname, kind),
+        ))
+        .fold(
+            (Vec::new(), Vec::new(), Vec::new()),
+            |(mut fs, mut fr, mut ir), (f, r, i)| {
+                fs.push(f);
+                fr.push(r);
+                ir.push(i);
+                (fs, fr, ir)
+            },
+        );
     quote! {
         #[derive(Debug, Clone, Default)]
         pub struct #name_ident {
@@ -461,12 +465,12 @@ fn gen_item_wrapper(s: &MsgStruct, name_ident: proc_macro2::Ident) -> TokenStrea
 }
 
 /// 生成 Rust 安全包装类型的代码
-pub fn gen_rust_wrappers(out_dir: &Path) {
+pub fn generate_rust_wrappers(out_dir: &Path) {
     use std::collections::BTreeMap;
 
     use syn::Fields;
 
-    let src = match fs::read_to_string(out_dir.join("msg_bindings.rs")) {
+    let src = match fs::read_to_string(out_dir.join(MSG_BINDINGS_FILE)) {
         Ok(s) => s,
         Err(e) => {
             println!("cargo:warning=Cannot read msg_bindings.rs: {e}");
@@ -554,8 +558,8 @@ pub fn gen_rust_wrappers(out_dir: &Path) {
         }
         let pkg_ident = format_ident!("{}", pkg);
         let mut cat_mods: Vec<TokenStream> = Vec::new();
-        for (cat, types) in cats {
-            let cat_ident = format_ident!("{}", cat);
+        for (msg, types) in cats {
+            let msg_ident = format_ident!("{}", msg);
 
             // 将本 cat 下的类型按「父名」分组：
             //   - name 不含 '_' → 直接放在 cat mod 中
@@ -566,7 +570,7 @@ pub fn gen_rust_wrappers(out_dir: &Path) {
                 if let Some((parent, _)) = s.name.split_once('_') {
                     grouped.entry(parent.to_string()).or_default().push(i);
                 } else {
-                    direct_items.push(gen_item_wrapper(s, format_ident!("{}", s.name)));
+                    direct_items.push(generate_item_wrapper(s, format_ident!("{}", s.name)));
                 }
             }
             // 生成各父名子模块
@@ -582,7 +586,7 @@ pub fn gen_rust_wrappers(out_dir: &Path) {
                                 .name
                                 .split_once('_')
                                 .map_or(s.name.as_str(), |(_, sub)| sub);
-                            gen_item_wrapper(s, format_ident!("{}", sub))
+                            generate_item_wrapper(s, format_ident!("{}", sub))
                         })
                         .collect();
                     quote! { pub mod #parent_ident { #(#sub_items)* } }
@@ -590,7 +594,7 @@ pub fn gen_rust_wrappers(out_dir: &Path) {
                 .collect();
 
             cat_mods.push(quote! {
-                pub mod #cat_ident {
+                pub mod #msg_ident {
                     #(#direct_items)*
                     #(#sub_mods)*
                 }
@@ -604,5 +608,5 @@ pub fn gen_rust_wrappers(out_dir: &Path) {
     let syntax_tree = syn::parse2::<syn::File>(all_tokens)
         .expect("Failed to parse generated tokens as syn::File");
     let formatted = prettyplease::unparse(&syntax_tree);
-    fs::write(out_dir.join("safe_types.rs"), formatted).expect("Failed to write safe_types.rs");
+    fs::write(out_dir.join(WARPPER_TYPES_FILE), formatted).expect("Failed to write safe_types.rs");
 }
