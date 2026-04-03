@@ -1,17 +1,14 @@
 [package]
-name = "zenrc-dds"
+name = "zenrc"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-proc-macro2 = "1"
-quote = "1"
-syn = { version = "2", features = ["full"] }
-prettyplease = "0.2"
+zenrc-dds = { path = "../zenrc-dds" }
 
 [build-dependencies]
+zenrc-dds = { path = "../zenrc-dds" }
 bindgen = "0.72"
 pkg-config = "0.3"
 cc = "1.0"
 sha2 = "0.11"
-

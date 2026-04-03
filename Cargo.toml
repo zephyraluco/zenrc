@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["zenrc-log", "zenrc-bt", "zenrc-shm", "zenrc-macros", "zenrc-dds"]
+members = ["zenrc-log", "zenrc-bt", "zenrc-shm", "zenrc-macros", "zenrc-dds", "zenrc"]
 
 [workspace.dependencies]
 nix = "0.31"
