@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::fs::{self, OpenOptions};
-use std::path::{Path, PathBuf};
+use std::fs::{self};
+use std::path::Path;
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};

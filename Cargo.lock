@@ -1402,6 +1402,7 @@ dependencies = [
  "quote",
  "sha2",
  "syn",
+ "thiserror",
 ]
 
 [[package]]
