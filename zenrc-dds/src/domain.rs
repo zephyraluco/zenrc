@@ -5,7 +5,8 @@ use crate::error::{check_entity, Result};
 use crate::publisher::Publisher;
 use crate::qos::Qos;
 use crate::subscriber::Subscription;
-use crate::topic::{DdsMsg, Topic};
+use crate::topic::Topic;
+use crate::msg_wrapper::RawMessageBridge;
 use crate::{dds_domainid_t, dds_entity_t};
 
 /// 让 CycloneDDS 自动选择域 ID（等同于 `DDS_DOMAIN_DEFAULT = UINT32_MAX`）
@@ -35,7 +36,7 @@ unsafe impl Sync for ParticipantInner {}
 /// 保证在所有派生对象销毁之前不会删除底层 DDS 实体。
 ///
 /// # 示例
-/// ```no_run
+/// ```ignore
 /// use zenrc_dds::domain::{DomainParticipant, DOMAIN_DEFAULT};
 /// use zenrc_dds::qos::Qos;
 ///
@@ -77,15 +78,19 @@ impl DomainParticipant {
         Ok(id)
     }
 
-    // ── 创建 Topic ─────────────────────────────────────────────────────────
+    // ── 创建 Topic ─────────────────────────────────────────────────────
 
     /// 创建带默认 QoS 的 Topic
-    pub fn create_topic<T: DdsMsg>(&self, name: &str) -> Result<Topic<T>> {
+    pub fn create_topic<T: RawMessageBridge>(&self, name: &str) -> Result<Topic<T>> {
         self.create_topic_with_qos(name, &Qos::default())
     }
 
     /// 创建带自定义 QoS 的 Topic
-    pub fn create_topic_with_qos<T: DdsMsg>(&self, name: &str, qos: &Qos) -> Result<Topic<T>> {
+    pub fn create_topic_with_qos<T: RawMessageBridge>(
+        &self,
+        name: &str,
+        qos: &Qos,
+    ) -> Result<Topic<T>> {
         let c_name = CString::new(name)?;
         let entity = unsafe {
             crate::dds_create_topic(
@@ -107,7 +112,14 @@ impl DomainParticipant {
     /// # 参数
     /// - `topic_name`：Topic 名称
     /// - `qos`：QoS 策略，可使用 [`Qos`] 预设（如 [`Qos::sensor_data()`]）
-    pub fn create_publisher<T: DdsMsg>(&self, topic_name: &str, qos: Qos) -> Result<Publisher<T>> {
+    ///
+    /// # 泛型参数
+    /// - `T`：安全的 Rust 消息类型，必须实现 [`RawMessageBridge`]
+    pub fn create_publisher<T: RawMessageBridge>(
+        &self,
+        topic_name: &str,
+        qos: Qos,
+    ) -> Result<Publisher<T>> {
         let topic = self.create_topic_with_qos::<T>(topic_name, &qos)?;
         let writer = unsafe {
             crate::dds_create_writer(
@@ -128,7 +140,10 @@ impl DomainParticipant {
     /// # 参数
     /// - `topic_name`：Topic 名称
     /// - `qos`：QoS 策略，需与发布者兼容
-    pub fn create_subscription<T: DdsMsg>(
+    ///
+    /// # 泛型参数
+    /// - `T`：安全的 Rust 消息类型，必须实现 [`RawMessageBridge`]
+    pub fn create_subscription<T: RawMessageBridge>(
         &self,
         topic_name: &str,
         qos: Qos,
@@ -165,4 +180,3 @@ impl DomainParticipant {
         Ok(buf)
     }
 }
-

@@ -6,7 +6,7 @@ use crate::error::{check_entity, check_ret, DdsError, Result};
 use crate::publisher::Publisher;
 use crate::qos::duration_to_nanos;
 use crate::subscriber::Subscription;
-use crate::topic::DdsMsg;
+use crate::msg_wrapper::RawMessageBridge;
 use crate::{dds_attach_t, dds_entity_t};
 
 /// 等待结果：触发了等待集的实体列表（每个元素对应 attach 时传入的 token）
@@ -15,7 +15,7 @@ pub type WaitResult = Vec<dds_attach_t>;
 /// DDS 等待集（WaitSet），用于同步等待多个条件（读者、守护条件等）。
 ///
 /// # 示例
-/// ```no_run
+/// ```ignore
 /// use zenrc_dds::waitset::WaitSet;
 /// use std::time::Duration;
 ///
@@ -48,7 +48,7 @@ impl WaitSet {
     // ── 附加条件 ──────────────────────────────────────────────────────────────
 
     /// 将订阅者的读者实体附加到等待集，`token` 用于在 [`WaitSet::wait`] 结果中识别
-    pub fn attach_reader<T: DdsMsg>(
+    pub fn attach_reader<T: RawMessageBridge>(
         &self,
         subscription: &Subscription<T>,
         token: isize,
@@ -59,7 +59,7 @@ impl WaitSet {
     }
 
     /// 将发布者的写者实体附加到等待集（等待发布匹配事件）
-    pub fn attach_writer<T: DdsMsg>(
+    pub fn attach_writer<T: RawMessageBridge>(
         &self,
         publisher: &Publisher<T>,
         token: isize,

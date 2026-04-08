@@ -422,6 +422,7 @@ fn generate_into_raw(key: &str, ty: &CFieldType) -> TokenStream {
 /// 生成单个消息类型的安全包装代码，包括结构体定义和 From/Into 实现
 fn generate_item_wrapper(s: &MsgStruct, name_ident: proc_macro2::Ident) -> TokenStream {
     let c_name_ident = format_ident!("{}_{}_{}", s.pkg, s.prefix, s.name);
+    let desc_ident = format_ident!("{}_{}_{}_desc", s.pkg, s.prefix, s.name);
     let (fields_ts, from_fields, into_stmts): (Vec<TokenStream>, Vec<TokenStream>, Vec<TokenStream>) = s
         .fields
         .iter()
@@ -459,6 +460,36 @@ fn generate_item_wrapper(s: &MsgStruct, name_ident: proc_macro2::Ident) -> Token
                 };
                 #(#into_stmts)*
                 raw
+            }
+        }
+
+        impl ::zenrc_dds::msg_wrapper::RawMessageBridge for #name_ident {
+            type CStruct = crate::#c_name_ident;
+
+            fn descriptor() -> *const ::zenrc_dds::dds_topic_descriptor_t {
+                unsafe { &crate::#desc_ident as *const _ }
+            }
+
+            fn to_raw(self) -> Self::CStruct {
+                // crate::#c_name_ident::from(self)
+                self.into()
+            }
+
+            fn from_raw(raw: Self::CStruct) -> Self {
+                let mut raw = raw;
+                let safe = Self::from(&raw);
+                unsafe {
+                    ::zenrc_dds::dds_sample_free(
+                        &mut raw as *mut Self::CStruct as *mut ::std::ffi::c_void,
+                        Self::descriptor(),
+                        ::zenrc_dds::dds_free_op_t_DDS_FREE_CONTENTS,
+                    );
+                }
+                safe
+            }
+
+            fn free_contents(&mut self) {
+                //TODO...
             }
         }
     }

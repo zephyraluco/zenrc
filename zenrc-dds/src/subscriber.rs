@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use crate::domain::ParticipantInner;
 use crate::error::{check_entity, check_ret, DdsError, Result};
-use crate::topic::{DdsMsg, Topic};
+use crate::topic::Topic;
+use crate::msg_wrapper::RawMessageBridge;
 use crate::{
     dds_entity_t, dds_instance_handle_t, dds_sample_info_t, dds_time_t,
     DDS_ANY_STATE,
@@ -50,70 +51,61 @@ impl From<dds_sample_info_t> for SampleInfo {
 
 /// 对从 DDS 取回的样本的 RAII 包装。
 ///
-/// Drop 时自动调用 [`DdsMsg::free_contents`]，释放 DDS 在反序列化期间
-/// 为字符串/序列等分配的内部堆内存。
-///
-/// 可通过 `Deref`/`DerefMut` 透明访问内部消息类型 `T`。
-pub struct Sample<T: DdsMsg> {
+/// T 是安全的 Rust 类型（实现 RawMessageBridge）。
+/// Drop 时自动调用 T::free_contents()，释放内存。
+pub struct Sample<T: RawMessageBridge> {
     inner: T,
     info: SampleInfo,
 }
 
-impl<T: DdsMsg> Sample<T> {
+impl<T: RawMessageBridge> Sample<T> {
     /// 获取样本元信息
     pub fn info(&self) -> &SampleInfo {
         &self.info
     }
 
-    /// 消费 Sample，返回消息和元信息（调用者负责通过 `DdsMsg::free_contents` 释放内存）
-    ///
-    /// # Safety
-    /// 若消息中含有 DDS 分配的字符串/序列，调用者必须手动调用
-    /// `unsafe { msg.free_contents() }` 或确保 msg 随后被正确销毁。
+    /// 消费 Sample，返回消息和元信息
     pub fn into_parts(self) -> (T, SampleInfo) {
         let info = self.info.clone();
-        // 取出内部数据（阻止 drop 再次释放）
-        let inner =
-            unsafe { std::ptr::read(&self.inner as *const T) };
-        // 让 Sample 的 drop 不再运行（因为内存已经被 move 走了）
+        let inner = unsafe { std::ptr::read(&self.inner as *const T) };
         std::mem::forget(self);
         (inner, info)
     }
 }
 
-impl<T: DdsMsg> Deref for Sample<T> {
+impl<T: RawMessageBridge> Deref for Sample<T> {
     type Target = T;
     fn deref(&self) -> &T {
         &self.inner
     }
 }
 
-impl<T: DdsMsg> DerefMut for Sample<T> {
+impl<T: RawMessageBridge> DerefMut for Sample<T> {
     fn deref_mut(&mut self) -> &mut T {
         &mut self.inner
     }
 }
 
-impl<T: DdsMsg> Drop for Sample<T> {
+impl<T: RawMessageBridge> Drop for Sample<T> {
     fn drop(&mut self) {
-        unsafe { self.inner.free_contents() };
+        self.inner.free_contents();
     }
 }
 
 // ─── Subscription<T> ───────────────────────────────────────────────────────────
 
-/// 类型化 DDS 读者（Subscription）。
+/// 类型化 DDS 读者（Subscription），使用安全类型 M。
 ///
-/// 对应 ROS2 的 `rclcpp::Subscription`。
-/// 通过 [`crate::domain::DomainParticipant::create_subscription`] 创建。
-pub struct Subscription<T: DdsMsg> {
+/// T 是一个实现 RawMessageBridge 的 Rust 类型。
+/// 内部工作于 T::Raw（C 原始类型），对用户透明地转换为 M。
+pub struct Subscription<T: RawMessageBridge> {
     reader: dds_entity_t,
     topic: Topic<T>,
     _participant: Arc<ParticipantInner>,
     _marker: PhantomData<T>,
 }
 
-impl<T: DdsMsg> Subscription<T> {
+impl<T: RawMessageBridge> Subscription<T> {
     pub(crate) fn new(
         reader: dds_entity_t,
         topic: Topic<T>,
@@ -167,11 +159,11 @@ impl<T: DdsMsg> Subscription<T> {
 
     /// 读取最多 `max` 条样本但不改变样本/实例状态（peek）
     pub fn peek(&self, max: usize) -> Result<Vec<Sample<T>>> {
-        let mut samples: Vec<T> =
+        let mut raw_samples: Vec<T::CStruct> =
             (0..max).map(|_| unsafe { std::mem::zeroed() }).collect();
-        let mut ptrs: Vec<*mut c_void> = samples
+        let mut ptrs: Vec<*mut c_void> = raw_samples
             .iter_mut()
-            .map(|s| s as *mut T as *mut c_void)
+            .map(|s| s as *mut T::CStruct as *mut c_void)
             .collect();
         let mut infos: Vec<dds_sample_info_t> =
             vec![unsafe { std::mem::zeroed() }; max];
@@ -186,14 +178,13 @@ impl<T: DdsMsg> Subscription<T> {
             )
         };
 
-        self.collect_samples(n, samples, infos)
+        self.collect_samples(n, raw_samples, infos)
     }
 
     // ── 等待有数据 ─────────────────────────────────────────────────────────────
 
     /// 阻塞等待直到有数据可读（超时后返回 Ok(false)）
     pub fn wait_for_data(&self, timeout: std::time::Duration) -> Result<bool> {
-        // 创建临时等待集（父实体必须为参与者，不能为 reader）
         let ws = unsafe { crate::dds_create_waitset(self._participant.entity) };
         let ws = check_entity(ws)?;
         let rc = unsafe { crate::dds_waitset_attach(ws, self.reader, self.reader as isize) };
@@ -274,18 +265,22 @@ impl<T: DdsMsg> Subscription<T> {
 
     // ── 内部实现 ──────────────────────────────────────────────────────────────
 
-    fn read_or_take(&self, max: usize, mask: u32, take: bool) -> Result<Vec<Sample<T>>> {
+    fn read_or_take(
+        &self,
+        max: usize,
+        mask: u32,
+        take: bool,
+    ) -> Result<Vec<Sample<T>>> {
         if max == 0 {
             return Ok(Vec::new());
         }
 
-        // 在栈/堆上分配样本缓冲区（zeroed 保证内部指针为 null）
-        let mut samples: Vec<T> =
+        // 在栈/堆上分配 Raw 类型缓冲区
+        let mut raw_samples: Vec<T::CStruct> =
             (0..max).map(|_| unsafe { std::mem::zeroed() }).collect();
-        // 收集指向各样本的 *mut c_void 指针
-        let mut ptrs: Vec<*mut c_void> = samples
+        let mut ptrs: Vec<*mut c_void> = raw_samples
             .iter_mut()
-            .map(|s| s as *mut T as *mut c_void)
+            .map(|s| s as *mut T::CStruct as *mut c_void)
             .collect();
         let mut infos: Vec<dds_sample_info_t> =
             vec![unsafe { std::mem::zeroed() }; max];
@@ -312,36 +307,33 @@ impl<T: DdsMsg> Subscription<T> {
             }
         };
 
-        self.collect_samples(n, samples, infos)
+        self.collect_samples(n, raw_samples, infos)
     }
 
     fn collect_samples(
         &self,
         n: i32,
-        samples: Vec<T>,
+        raw_samples: Vec<T::CStruct>,
         infos: Vec<dds_sample_info_t>,
     ) -> Result<Vec<Sample<T>>> {
         if n < 0 {
-            // dds_take/read 返回的负值实际上不会发生（0 表示没有样本），
-            // 但为了完整性仍处理
             return Err(DdsError::RetCode(n, "dds_take/read failed".into()));
         }
         let n = n as usize;
 
-        let result = samples
+        let result = raw_samples
             .into_iter()
             .zip(infos.into_iter())
             .take(n)
-            .filter_map(|(inner, raw_info)| {
+            .filter_map(|(raw, raw_info)| {
                 if raw_info.valid_data {
+                    let inner = T::from_raw(raw);
                     Some(Sample {
                         inner,
                         info: SampleInfo::from(raw_info),
                     })
                 } else {
-                    // 无效样本：DDS 仍可能为其分配了内存，需要释放
-                    let mut inner = inner;
-                    unsafe { inner.free_contents() };
+                    let _ = T::from_raw(raw);
                     None
                 }
             })
@@ -351,12 +343,11 @@ impl<T: DdsMsg> Subscription<T> {
     }
 }
 
-impl<T: DdsMsg> Drop for Subscription<T> {
+impl<T: RawMessageBridge> Drop for Subscription<T> {
     fn drop(&mut self) {
         unsafe { crate::dds_delete(self.reader) };
-        // topic 由 self.topic 的 Drop 自动删除
     }
 }
 
-unsafe impl<T: DdsMsg> Send for Subscription<T> {}
-unsafe impl<T: DdsMsg> Sync for Subscription<T> {}
+unsafe impl<T: RawMessageBridge> Send for Subscription<T> {}
+unsafe impl<T: RawMessageBridge> Sync for Subscription<T> {}

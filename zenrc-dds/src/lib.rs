@@ -8,6 +8,7 @@ include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
 // ─── 消息代码生成工具 ─────────────────────────────────────────────────────────
 pub mod msg_gen;
+pub mod msg_wrapper;
 
 // ─── 安全 Rust API ────────────────────────────────────────────────────────────
 
@@ -39,6 +40,5 @@ pub use error::{DdsError, Result};
 pub use publisher::Publisher;
 pub use qos::{Durability, History, Liveliness, Ownership, Qos, Reliability};
 pub use subscriber::{Sample, SampleInfo, Subscription};
-pub use topic::DdsMsg;
 pub use waitset::{GuardCondition, WaitSet};
 

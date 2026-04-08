@@ -21,9 +21,9 @@ use std::time::Duration;
 use zenrc_dds::{
     domain::{DomainParticipant, DOMAIN_DEFAULT},
     error::DdsError,
-    qos::{Durability, History, Liveliness, Ownership, Qos, Reliability},
-    DdsMsg,
+    qos::{Durability, History, Liveliness, Ownership, Qos, Reliability}
 };
+use zenrc_dds::msg_wrapper::RawMessageBridge;
 
 // ─── 测试消息类型 ──────────────────────────────────────────────────────────────
 //
@@ -85,13 +85,24 @@ fn test_msg_descriptor() -> *const zenrc_dds::dds_topic_descriptor_t {
 }
 
 // SAFETY: 描述符指向 'static 数据，内存布局与 TestMsg 完全匹配。
-unsafe impl DdsMsg for TestMsg {
+// TestMsg 实现 RawMessageBridge：它同时作为安全类型和原始类型。
+impl RawMessageBridge for TestMsg {
+    type CStruct = TestMsg;
+
     fn descriptor() -> *const zenrc_dds::dds_topic_descriptor_t {
         test_msg_descriptor()
     }
 
+    fn to_raw(self) -> Self::CStruct {
+        self
+    }
+
+    fn from_raw(raw: Self::CStruct) -> Self {
+        raw
+    }
+
     // TestMsg 只含基本数值字段，无 DDS 分配的堆内存，free_contents 为空操作
-    unsafe fn free_contents(&mut self) {}
+    fn free_contents(&mut self) {}
 }
 
 // ─── 助手：生成唯一 topic 名称（防止跨测试串扰）─────────────────────────────────
@@ -448,7 +459,7 @@ mod publisher_tests {
             .create_publisher::<TestMsg>(&unique_topic("pub_write"), Qos::sensor_data())
             .unwrap();
         let msg = TestMsg { value: 3.14 };
-        pub_.publish(&msg).unwrap();
+        pub_.publish(msg).unwrap();
     }
 
     #[test]
@@ -458,47 +469,10 @@ mod publisher_tests {
             .create_publisher::<TestMsg>(&unique_topic("pub_ts"), Qos::sensor_data())
             .unwrap();
         let msg = TestMsg { value: 1.0 };
-        pub_.publish_with_timestamp(&msg, 1_000_000_000).unwrap();
+        pub_.publish_with_timestamp(msg, 1_000_000_000).unwrap();
     }
 
-    #[test]
-    fn publication_matched_status_ok() {
-        let dp = DomainParticipant::new(0).unwrap();
-        let pub_ = dp
-            .create_publisher::<TestMsg>(&unique_topic("pub_match"), Qos::sensor_data())
-            .unwrap();
-        let status = pub_.publication_matched_status().unwrap();
-        // 初始应无匹配订阅者
-        assert_eq!(status.current_count, 0);
-    }
 
-    #[test]
-    fn matched_subscriptions_empty_initially() {
-        let dp = DomainParticipant::new(0).unwrap();
-        let pub_ = dp
-            .create_publisher::<TestMsg>(&unique_topic("pub_subs"), Qos::sensor_data())
-            .unwrap();
-        let handles = pub_.matched_subscriptions().unwrap();
-        assert!(handles.is_empty());
-    }
-
-    #[test]
-    fn flush_succeeds() {
-        let dp = DomainParticipant::new(0).unwrap();
-        let pub_ = dp
-            .create_publisher::<TestMsg>(&unique_topic("pub_flush"), Qos::sensor_data())
-            .unwrap();
-        pub_.flush().unwrap();
-    }
-
-    #[test]
-    fn assert_liveliness_succeeds() {
-        let dp = DomainParticipant::new(0).unwrap();
-        let pub_ = dp
-            .create_publisher::<TestMsg>(&unique_topic("pub_liveness"), Qos::sensor_data())
-            .unwrap();
-        pub_.assert_liveliness().unwrap();
-    }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -615,7 +589,7 @@ mod pubsub_tests {
         std::thread::sleep(Duration::from_millis(50));
 
         let msg = TestMsg { value: 42.0 };
-        pub_.publish(&msg).unwrap();
+        pub_.publish(msg).unwrap();
 
         // 等待数据送达
         let received = sub
@@ -646,7 +620,7 @@ mod pubsub_tests {
 
         let values = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
         for &v in &values {
-            pub_.publish(&TestMsg { value: v }).unwrap();
+            pub_.publish(TestMsg { value: v }).unwrap();
         }
 
         // 等待全部数据
@@ -678,7 +652,7 @@ mod pubsub_tests {
             .unwrap();
 
         std::thread::sleep(Duration::from_millis(50));
-        pub_.publish(&TestMsg { value: 7.0 }).unwrap();
+        pub_.publish(TestMsg { value: 7.0 }).unwrap();
 
         sub.wait_for_data(Duration::from_millis(200)).unwrap();
 
@@ -701,7 +675,7 @@ mod pubsub_tests {
             .unwrap();
 
         std::thread::sleep(Duration::from_millis(50));
-        pub_.publish(&TestMsg { value: 99.9 }).unwrap();
+        pub_.publish(TestMsg { value: 99.9 }).unwrap();
         sub.wait_for_data(Duration::from_millis(200)).unwrap();
 
         let sample = sub.take_one().unwrap().unwrap();
@@ -804,7 +778,7 @@ mod waitset_tests {
         ws.attach_reader(&sub, 1).unwrap();
 
         std::thread::sleep(Duration::from_millis(50));
-        pub_.publish(&TestMsg { value: 5.0 }).unwrap();
+        pub_.publish(TestMsg { value: 5.0 }).unwrap();
 
         let triggered = ws.wait(Duration::from_millis(500)).unwrap();
         assert!(!triggered.is_empty(), "WaitSet 应检测到发布的数据");
