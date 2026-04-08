@@ -1,7 +1,7 @@
 use std::ffi::CString;
 use std::time::Duration;
 
-use crate::{
+use zenrc_dds::{
     dds_durability_kind_DDS_DURABILITY_PERSISTENT, dds_durability_kind_DDS_DURABILITY_TRANSIENT,
     dds_durability_kind_DDS_DURABILITY_TRANSIENT_LOCAL,
     dds_durability_kind_DDS_DURABILITY_VOLATILE, dds_history_kind_DDS_HISTORY_KEEP_ALL,
@@ -13,7 +13,7 @@ use crate::{
     dds_reliability_kind_DDS_RELIABILITY_BEST_EFFORT,
     dds_reliability_kind_DDS_RELIABILITY_RELIABLE, dds_qos_t,
 };
-use crate::error::Result;
+use super::error::Result;
 
 // ─── 枚举：可靠性 ──────────────────────────────────────────────────────────────
 
@@ -91,7 +91,7 @@ unsafe impl Sync for Qos {}
 impl Qos {
     /// 创建一个空的 QoS 对象（使用 DDS 默认值）
     pub fn new() -> Self {
-        let raw = unsafe { crate::dds_create_qos() };
+        let raw = unsafe { zenrc_dds::dds_create_qos() };
         assert!(!raw.is_null(), "dds_create_qos 返回 null");
         Self { raw }
     }
@@ -105,7 +105,7 @@ impl Qos {
             Reliability::Reliable => dds_reliability_kind_DDS_RELIABILITY_RELIABLE,
         };
         unsafe {
-            crate::dds_qset_reliability(self.raw, raw_kind, duration_to_nanos(max_blocking));
+            zenrc_dds::dds_qset_reliability(self.raw, raw_kind, duration_to_nanos(max_blocking));
         }
         self
     }
@@ -119,7 +119,7 @@ impl Qos {
             Durability::Persistent => dds_durability_kind_DDS_DURABILITY_PERSISTENT,
         };
         unsafe {
-            crate::dds_qset_durability(self.raw, raw_kind);
+            zenrc_dds::dds_qset_durability(self.raw, raw_kind);
         }
         self
     }
@@ -131,7 +131,7 @@ impl Qos {
             History::KeepAll => (dds_history_kind_DDS_HISTORY_KEEP_ALL, -1),
         };
         unsafe {
-            crate::dds_qset_history(self.raw, raw_kind, depth);
+            zenrc_dds::dds_qset_history(self.raw, raw_kind, depth);
         }
         self
     }
@@ -139,7 +139,7 @@ impl Qos {
     /// 设置截止时间（Deadline）
     pub fn deadline(self, period: Duration) -> Self {
         unsafe {
-            crate::dds_qset_deadline(self.raw, duration_to_nanos(period));
+            zenrc_dds::dds_qset_deadline(self.raw, duration_to_nanos(period));
         }
         self
     }
@@ -147,7 +147,7 @@ impl Qos {
     /// 设置数据生命周期（Lifespan）
     pub fn lifespan(self, duration: Duration) -> Self {
         unsafe {
-            crate::dds_qset_lifespan(self.raw, duration_to_nanos(duration));
+            zenrc_dds::dds_qset_lifespan(self.raw, duration_to_nanos(duration));
         }
         self
     }
@@ -155,7 +155,7 @@ impl Qos {
     /// 设置延迟预算（Latency Budget）
     pub fn latency_budget(self, duration: Duration) -> Self {
         unsafe {
-            crate::dds_qset_latency_budget(self.raw, duration_to_nanos(duration));
+            zenrc_dds::dds_qset_latency_budget(self.raw, duration_to_nanos(duration));
         }
         self
     }
@@ -170,7 +170,7 @@ impl Qos {
             Liveliness::ManualByTopic => dds_liveliness_kind_DDS_LIVELINESS_MANUAL_BY_TOPIC,
         };
         unsafe {
-            crate::dds_qset_liveliness(self.raw, raw_kind, duration_to_nanos(lease_duration));
+            zenrc_dds::dds_qset_liveliness(self.raw, raw_kind, duration_to_nanos(lease_duration));
         }
         self
     }
@@ -182,7 +182,7 @@ impl Qos {
             Ownership::Exclusive => dds_ownership_kind_DDS_OWNERSHIP_EXCLUSIVE,
         };
         unsafe {
-            crate::dds_qset_ownership(self.raw, raw_kind);
+            zenrc_dds::dds_qset_ownership(self.raw, raw_kind);
         }
         self
     }
@@ -190,7 +190,7 @@ impl Qos {
     /// 设置所有权强度（仅 Exclusive 模式下有效）
     pub fn ownership_strength(self, value: i32) -> Self {
         unsafe {
-            crate::dds_qset_ownership_strength(self.raw, value);
+            zenrc_dds::dds_qset_ownership_strength(self.raw, value);
         }
         self
     }
@@ -204,7 +204,7 @@ impl Qos {
         let mut ptrs: Vec<*const std::os::raw::c_char> =
             c_strs.iter().map(|s| s.as_ptr()).collect();
         unsafe {
-            crate::dds_qset_partition(self.raw, ptrs.len() as u32, ptrs.as_mut_ptr());
+            zenrc_dds::dds_qset_partition(self.raw, ptrs.len() as u32, ptrs.as_mut_ptr());
         }
         Ok(self)
     }
@@ -213,7 +213,7 @@ impl Qos {
     pub fn partition1(self, name: &str) -> Result<Self> {
         let c_name = CString::new(name)?;
         unsafe {
-            crate::dds_qset_partition1(self.raw, c_name.as_ptr());
+            zenrc_dds::dds_qset_partition1(self.raw, c_name.as_ptr());
         }
         Ok(self)
     }
@@ -226,7 +226,7 @@ impl Qos {
         max_samples_per_instance: i32,
     ) -> Self {
         unsafe {
-            crate::dds_qset_resource_limits(
+            zenrc_dds::dds_qset_resource_limits(
                 self.raw,
                 max_samples,
                 max_instances,
@@ -240,7 +240,7 @@ impl Qos {
     pub fn entity_name(self, name: &str) -> Result<Self> {
         let c_name = CString::new(name)?;
         unsafe {
-            crate::dds_qset_entity_name(self.raw, c_name.as_ptr());
+            zenrc_dds::dds_qset_entity_name(self.raw, c_name.as_ptr());
         }
         Ok(self)
     }
@@ -310,7 +310,7 @@ impl Default for Qos {
 
 impl Drop for Qos {
     fn drop(&mut self) {
-        unsafe { crate::dds_delete_qos(self.raw) };
+        unsafe { zenrc_dds::dds_delete_qos(self.raw) };
     }
 }
 

@@ -3,11 +3,11 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use crate::domain::ParticipantInner;
-use crate::error::{check_entity, check_ret, DdsError, Result};
-use crate::topic::Topic;
-use crate::msg_wrapper::RawMessageBridge;
-use crate::{
+use super::domain::ParticipantInner;
+use super::error::{check_entity, check_ret, DdsError, Result};
+use super::topic::Topic;
+use zenrc_dds::RawMessageBridge;
+use zenrc_dds::{
     dds_entity_t, dds_instance_handle_t, dds_sample_info_t, dds_time_t,
     DDS_ANY_STATE,
 };
@@ -36,9 +36,9 @@ pub struct SampleInfo {
 impl From<dds_sample_info_t> for SampleInfo {
     fn from(raw: dds_sample_info_t) -> Self {
         Self {
-            was_read: raw.sample_state == crate::dds_sample_state_DDS_SST_READ,
-            is_new_view: raw.view_state == crate::dds_view_state_DDS_VST_NEW,
-            is_alive: raw.instance_state == crate::dds_instance_state_DDS_IST_ALIVE,
+            was_read: raw.sample_state == zenrc_dds::dds_sample_state_DDS_SST_READ,
+            is_new_view: raw.view_state == zenrc_dds::dds_view_state_DDS_VST_NEW,
+            is_alive: raw.instance_state == zenrc_dds::dds_instance_state_DDS_IST_ALIVE,
             valid_data: raw.valid_data,
             source_timestamp: raw.source_timestamp,
             instance_handle: raw.instance_handle,
@@ -94,10 +94,10 @@ impl<T: RawMessageBridge> Drop for Sample<T> {
 
 // ─── Subscription<T> ───────────────────────────────────────────────────────────
 
-/// 类型化 DDS 读者（Subscription），使用安全类型 M。
+/// 类型化 DDS 读者（Subscription），使用安全类型 T。
 ///
 /// T 是一个实现 RawMessageBridge 的 Rust 类型。
-/// 内部工作于 T::Raw（C 原始类型），对用户透明地转换为 M。
+/// 内部工作于 T::CStruct（C 原始类型），对用户透明地转换为 T。
 pub struct Subscription<T: RawMessageBridge> {
     reader: dds_entity_t,
     topic: Topic<T>,
@@ -169,7 +169,7 @@ impl<T: RawMessageBridge> Subscription<T> {
             vec![unsafe { std::mem::zeroed() }; max];
 
         let n = unsafe {
-            crate::dds_peek(
+            zenrc_dds::dds_peek(
                 self.reader,
                 ptrs.as_mut_ptr(),
                 infos.as_mut_ptr(),
@@ -185,17 +185,17 @@ impl<T: RawMessageBridge> Subscription<T> {
 
     /// 阻塞等待直到有数据可读（超时后返回 Ok(false)）
     pub fn wait_for_data(&self, timeout: std::time::Duration) -> Result<bool> {
-        let ws = unsafe { crate::dds_create_waitset(self._participant.entity) };
+        let ws = unsafe { zenrc_dds::dds_create_waitset(self._participant.entity) };
         let ws = check_entity(ws)?;
-        let rc = unsafe { crate::dds_waitset_attach(ws, self.reader, self.reader as isize) };
+        let rc = unsafe { zenrc_dds::dds_waitset_attach(ws, self.reader, self.reader as isize) };
         check_ret(rc)?;
 
-        let timeout_ns = crate::qos::duration_to_nanos(timeout);
-        let mut attach: crate::dds_attach_t = 0;
+        let timeout_ns = super::qos::duration_to_nanos(timeout);
+        let mut attach: zenrc_dds::dds_attach_t = 0;
         let n =
-            unsafe { crate::dds_waitset_wait(ws, &mut attach, 1, timeout_ns) };
+            unsafe { zenrc_dds::dds_waitset_wait(ws, &mut attach, 1, timeout_ns) };
 
-        unsafe { crate::dds_delete(ws) };
+        unsafe { zenrc_dds::dds_delete(ws) };
 
         if n == 0 {
             Ok(false)
@@ -211,19 +211,19 @@ impl<T: RawMessageBridge> Subscription<T> {
     /// 获取订阅匹配状态（有多少发布者与该读者匹配）
     pub fn subscription_matched_status(
         &self,
-    ) -> Result<crate::dds_subscription_matched_status_t> {
+    ) -> Result<zenrc_dds::dds_subscription_matched_status_t> {
         let mut status = unsafe { std::mem::zeroed() };
         check_ret(unsafe {
-            crate::dds_get_subscription_matched_status(self.reader, &mut status)
+            zenrc_dds::dds_get_subscription_matched_status(self.reader, &mut status)
         })?;
         Ok(status)
     }
 
     /// 获取样本丢失状态
-    pub fn sample_lost_status(&self) -> Result<crate::dds_sample_lost_status_t> {
+    pub fn sample_lost_status(&self) -> Result<zenrc_dds::dds_sample_lost_status_t> {
         let mut status = unsafe { std::mem::zeroed() };
         check_ret(unsafe {
-            crate::dds_get_sample_lost_status(self.reader, &mut status)
+            zenrc_dds::dds_get_sample_lost_status(self.reader, &mut status)
         })?;
         Ok(status)
     }
@@ -233,7 +233,7 @@ impl<T: RawMessageBridge> Subscription<T> {
         const MAX: usize = 64;
         let mut handles = vec![0u64; MAX];
         let ret = unsafe {
-            crate::dds_get_matched_publications(self.reader, handles.as_mut_ptr(), MAX)
+            zenrc_dds::dds_get_matched_publications(self.reader, handles.as_mut_ptr(), MAX)
         };
         let n = check_entity(ret)? as usize;
         handles.truncate(n);
@@ -246,9 +246,9 @@ impl<T: RawMessageBridge> Subscription<T> {
         max_wait: std::time::Duration,
     ) -> Result<()> {
         check_ret(unsafe {
-            crate::dds_reader_wait_for_historical_data(
+            zenrc_dds::dds_reader_wait_for_historical_data(
                 self.reader,
-                crate::qos::duration_to_nanos(max_wait),
+                super::qos::duration_to_nanos(max_wait),
             )
         })
     }
@@ -275,7 +275,6 @@ impl<T: RawMessageBridge> Subscription<T> {
             return Ok(Vec::new());
         }
 
-        // 在栈/堆上分配 Raw 类型缓冲区
         let mut raw_samples: Vec<T::CStruct> =
             (0..max).map(|_| unsafe { std::mem::zeroed() }).collect();
         let mut ptrs: Vec<*mut c_void> = raw_samples
@@ -287,7 +286,7 @@ impl<T: RawMessageBridge> Subscription<T> {
 
         let n = unsafe {
             if take {
-                crate::dds_take_mask(
+                zenrc_dds::dds_take_mask(
                     self.reader,
                     ptrs.as_mut_ptr(),
                     infos.as_mut_ptr(),
@@ -296,7 +295,7 @@ impl<T: RawMessageBridge> Subscription<T> {
                     mask,
                 )
             } else {
-                crate::dds_read_mask(
+                zenrc_dds::dds_read_mask(
                     self.reader,
                     ptrs.as_mut_ptr(),
                     infos.as_mut_ptr(),
@@ -321,31 +320,25 @@ impl<T: RawMessageBridge> Subscription<T> {
         }
         let n = n as usize;
 
-        let result = raw_samples
-            .into_iter()
-            .zip(infos.into_iter())
-            .take(n)
-            .filter_map(|(raw, raw_info)| {
-                if raw_info.valid_data {
-                    let inner = T::from_raw(raw);
-                    Some(Sample {
-                        inner,
-                        info: SampleInfo::from(raw_info),
-                    })
-                } else {
-                    let _ = T::from_raw(raw);
-                    None
-                }
-            })
-            .collect();
-
+        let mut result = Vec::with_capacity(n);
+        for (raw, raw_info) in raw_samples.into_iter().zip(infos.into_iter()).take(n) {
+            if raw_info.valid_data {
+                let inner = T::from_raw(raw);
+                result.push(Sample {
+                    inner,
+                    info: SampleInfo::from(raw_info),
+                });
+            } else {
+                let _ = T::from_raw(raw);
+            }
+        }
         Ok(result)
     }
 }
 
 impl<T: RawMessageBridge> Drop for Subscription<T> {
     fn drop(&mut self) {
-        unsafe { crate::dds_delete(self.reader) };
+        unsafe { zenrc_dds::dds_delete(self.reader) };
     }
 }
 

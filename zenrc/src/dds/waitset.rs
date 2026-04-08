@@ -1,13 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::domain::ParticipantInner;
-use crate::error::{check_entity, check_ret, DdsError, Result};
-use crate::publisher::Publisher;
-use crate::qos::duration_to_nanos;
-use crate::subscriber::Subscription;
-use crate::msg_wrapper::RawMessageBridge;
-use crate::{dds_attach_t, dds_entity_t};
+use super::domain::{ParticipantInner,DomainParticipant};
+use super::error::{check_entity, check_ret, DdsError, Result};
+use super::publisher::Publisher;
+use super::qos::duration_to_nanos;
+use super::subscriber::Subscription;
+use zenrc_dds::RawMessageBridge;
+use zenrc_dds::{dds_attach_t, dds_entity_t};
 
 /// 等待结果：触发了等待集的实体列表（每个元素对应 attach 时传入的 token）
 pub type WaitResult = Vec<dds_attach_t>;
@@ -16,7 +16,7 @@ pub type WaitResult = Vec<dds_attach_t>;
 ///
 /// # 示例
 /// ```ignore
-/// use zenrc_dds::waitset::WaitSet;
+/// use super::waitset::WaitSet;
 /// use std::time::Duration;
 ///
 /// let mut ws = WaitSet::new(&participant).unwrap();
@@ -36,8 +36,8 @@ pub struct WaitSet {
 
 impl WaitSet {
     /// 在指定参与者下创建等待集
-    pub fn new(participant: &crate::domain::DomainParticipant) -> Result<Self> {
-        let entity = unsafe { crate::dds_create_waitset(participant.entity()) };
+    pub fn new(participant: &DomainParticipant) -> Result<Self> {
+        let entity = unsafe { zenrc_dds::dds_create_waitset(participant.entity()) };
         let entity = check_entity(entity)?;
         Ok(Self {
             entity,
@@ -54,7 +54,7 @@ impl WaitSet {
         token: isize,
     ) -> Result<()> {
         check_ret(unsafe {
-            crate::dds_waitset_attach(self.entity, subscription.entity(), token)
+            zenrc_dds::dds_waitset_attach(self.entity, subscription.entity(), token)
         })
     }
 
@@ -65,25 +65,25 @@ impl WaitSet {
         token: isize,
     ) -> Result<()> {
         check_ret(unsafe {
-            crate::dds_waitset_attach(self.entity, publisher.entity(), token)
+            zenrc_dds::dds_waitset_attach(self.entity, publisher.entity(), token)
         })
     }
 
     /// 附加任意 DDS 实体句柄
     pub fn attach_entity(&self, entity: dds_entity_t, token: isize) -> Result<()> {
-        check_ret(unsafe { crate::dds_waitset_attach(self.entity, entity, token) })
+        check_ret(unsafe { zenrc_dds::dds_waitset_attach(self.entity, entity, token) })
     }
 
     /// 从等待集中移除实体
     pub fn detach_entity(&self, entity: dds_entity_t) -> Result<()> {
-        check_ret(unsafe { crate::dds_waitset_detach(self.entity, entity) })
+        check_ret(unsafe { zenrc_dds::dds_waitset_detach(self.entity, entity) })
     }
 
     // ── 守护条件 ──────────────────────────────────────────────────────────────
 
     /// 创建守护条件（GuardCondition），允许外部线程触发等待集
     pub fn create_guard_condition(&self) -> Result<GuardCondition> {
-        let entity = unsafe { crate::dds_create_guardcondition(self.entity) };
+        let entity = unsafe { zenrc_dds::dds_create_guardcondition(self.entity) };
         let entity = check_entity(entity)?;
         Ok(GuardCondition { entity })
     }
@@ -102,7 +102,7 @@ impl WaitSet {
         const MAX_TRIGGERS: usize = 32;
         let mut xs: Vec<dds_attach_t> = vec![0; MAX_TRIGGERS];
         let n = unsafe {
-            crate::dds_waitset_wait_until(
+            zenrc_dds::dds_waitset_wait_until(
                 self.entity,
                 xs.as_mut_ptr(),
                 MAX_TRIGGERS,
@@ -114,7 +114,7 @@ impl WaitSet {
 
     /// 手动触发等待集（用于外部唤醒）
     pub fn trigger(&self) -> Result<()> {
-        check_ret(unsafe { crate::dds_waitset_set_trigger(self.entity, true) })
+        check_ret(unsafe { zenrc_dds::dds_waitset_set_trigger(self.entity, true) })
     }
 
     /// 获取等待集中所有已附加的实体句柄
@@ -122,7 +122,7 @@ impl WaitSet {
         const MAX: usize = 64;
         let mut buf = vec![0i32; MAX];
         let n = unsafe {
-            crate::dds_waitset_get_entities(self.entity, buf.as_mut_ptr(), MAX)
+            zenrc_dds::dds_waitset_get_entities(self.entity, buf.as_mut_ptr(), MAX)
         };
         let n = check_entity(n)? as usize;
         buf.truncate(n);
@@ -140,7 +140,7 @@ impl WaitSet {
         const MAX_TRIGGERS: usize = 32;
         let mut xs: Vec<dds_attach_t> = vec![0; MAX_TRIGGERS];
         let n = unsafe {
-            crate::dds_waitset_wait(
+            zenrc_dds::dds_waitset_wait(
                 self.entity,
                 xs.as_mut_ptr(),
                 MAX_TRIGGERS,
@@ -152,7 +152,7 @@ impl WaitSet {
 
     fn handle_wait_result(
         &self,
-        n: crate::dds_return_t,
+        n: zenrc_dds::dds_return_t,
         mut xs: Vec<dds_attach_t>,
     ) -> Result<WaitResult> {
         if n < 0 {
@@ -165,7 +165,7 @@ impl WaitSet {
 
 impl Drop for WaitSet {
     fn drop(&mut self) {
-        unsafe { crate::dds_delete(self.entity) };
+        unsafe { zenrc_dds::dds_delete(self.entity) };
     }
 }
 
@@ -182,25 +182,25 @@ pub struct GuardCondition {
 impl GuardCondition {
     /// 触发守护条件（唤醒等待此条件的等待集）
     pub fn trigger(&self) -> Result<()> {
-        check_ret(unsafe { crate::dds_set_guardcondition(self.entity, true) })
+        check_ret(unsafe { zenrc_dds::dds_set_guardcondition(self.entity, true) })
     }
 
     /// 清除触发状态
     pub fn reset(&self) -> Result<()> {
-        check_ret(unsafe { crate::dds_set_guardcondition(self.entity, false) })
+        check_ret(unsafe { zenrc_dds::dds_set_guardcondition(self.entity, false) })
     }
 
     /// 读取当前触发状态（读取后不清除）
     pub fn is_triggered(&self) -> Result<bool> {
         let mut triggered = false;
-        check_ret(unsafe { crate::dds_read_guardcondition(self.entity, &mut triggered) })?;
+        check_ret(unsafe { zenrc_dds::dds_read_guardcondition(self.entity, &mut triggered) })?;
         Ok(triggered)
     }
 
     /// 读取并清除触发状态
     pub fn take_triggered(&self) -> Result<bool> {
         let mut triggered = false;
-        check_ret(unsafe { crate::dds_take_guardcondition(self.entity, &mut triggered) })?;
+        check_ret(unsafe { zenrc_dds::dds_take_guardcondition(self.entity, &mut triggered) })?;
         Ok(triggered)
     }
 
@@ -212,7 +212,7 @@ impl GuardCondition {
 
 impl Drop for GuardCondition {
     fn drop(&mut self) {
-        unsafe { crate::dds_delete(self.entity) };
+        unsafe { zenrc_dds::dds_delete(self.entity) };
     }
 }
 

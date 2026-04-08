@@ -6,39 +6,27 @@
 // ─── 原始 C 绑定（由 bindgen 自动生成）────────────────────────────────────────
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
-// ─── 消息代码生成工具 ─────────────────────────────────────────────────────────
-pub mod msg_gen;
-pub mod msg_wrapper;
+// ─── ROS2 消息类型 C 绑定（由 IDL 编译 + bindgen 自动生成）──────────────────
+include!(concat!(env!("OUT_DIR"), "/msg_bindings.rs"));
 
-// ─── 安全 Rust API ────────────────────────────────────────────────────────────
+// ─── 安全的 ROS2 消息 Rust 包装类型（由 msg_gen 自动生成）───────────────────
+include!(concat!(env!("OUT_DIR"), "/generate_types.rs"));
 
-/// 错误类型与 Result 别名
-pub mod error;
+// ─── 消息桥接 trait（内部使用，供生成的安全类型实现）───────────────────────────
 
-/// QoS 策略（Builder 模式 + ROS2 预设 Profile）
-pub mod qos;
+pub trait RawMessageBridge: Sized {
+    /// 对应的原始 C 消息类型。
+    type CStruct;
 
-/// DdsMsg trait 与类型化 Topic 句柄
-pub mod topic;
+    /// 获取 DDS 主题描述符指针。
+    fn descriptor() -> *const dds_topic_descriptor_t;
 
-/// 域参与者（Domain Participant）——发布者/订阅者的工厂
-pub mod domain;
+    /// 转换为原始类型（消费 self）。
+    fn to_raw(self) -> Self::CStruct;
 
-/// 类型化 DDS 写者
-pub mod publisher;
+    /// 从原始类型转换回安全类型，并消费该原始值。
+    fn from_raw(raw: Self::CStruct) -> Self;
 
-/// 类型化 DDS 读者 + 样本包装 + 样本元信息
-pub mod subscriber;
-
-/// 等待集（WaitSet）与守护条件（GuardCondition）
-pub mod waitset;
-
-// ─── 常用类型的顶层重导出 ──────────────────────────────────────────────────────
-
-pub use domain::DomainParticipant;
-pub use error::{DdsError, Result};
-pub use publisher::Publisher;
-pub use qos::{Durability, History, Liveliness, Ownership, Qos, Reliability};
-pub use subscriber::{Sample, SampleInfo, Subscription};
-pub use waitset::{GuardCondition, WaitSet};
-
+    /// 释放内存（由 DDS 在反序列化时分配的字符串/序列等）。
+    fn free_contents(&mut self);
+}

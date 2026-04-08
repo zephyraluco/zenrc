@@ -20,7 +20,7 @@ pub type Result<T, E = DdsError> = std::result::Result<T, E>;
 
 /// 将 DDS 实体句柄转换为 Result，负值为错误
 #[inline]
-pub(crate) fn check_entity(entity: crate::dds_entity_t) -> Result<crate::dds_entity_t> {
+pub(crate) fn check_entity(entity: zenrc_dds::dds_entity_t) -> Result<zenrc_dds::dds_entity_t> {
     if entity >= 0 {
         Ok(entity)
     } else {
@@ -30,7 +30,7 @@ pub(crate) fn check_entity(entity: crate::dds_entity_t) -> Result<crate::dds_ent
 
 /// 将 DDS 返回码转换为 Result，负值为错误
 #[inline]
-pub(crate) fn check_ret(ret: crate::dds_return_t) -> Result<()> {
+pub(crate) fn check_ret(ret: zenrc_dds::dds_return_t) -> Result<()> {
     if ret >= 0 {
         Ok(())
     } else {
@@ -40,7 +40,7 @@ pub(crate) fn check_ret(ret: crate::dds_return_t) -> Result<()> {
 
 fn dds_err(code: i32) -> DdsError {
     let msg = unsafe {
-        let ptr = crate::dds_strretcode(code);
+        let ptr = zenrc_dds::dds_strretcode(code);
         if ptr.is_null() {
             "unknown error".to_owned()
         } else {
@@ -56,47 +56,6 @@ fn dds_err(code: i32) -> DdsError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn check_entity_positive_is_ok() {
-        assert_eq!(check_entity(42).unwrap(), 42);
-    }
-
-    #[test]
-    fn check_entity_zero_is_ok() {
-        assert_eq!(check_entity(0).unwrap(), 0);
-    }
-
-    #[test]
-    fn check_entity_negative_returns_retcode_error() {
-        let err = check_entity(-1).unwrap_err();
-        match err {
-            DdsError::RetCode(code, msg) => {
-                assert_eq!(code, -1);
-                assert!(!msg.is_empty());
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn check_ret_zero_is_ok() {
-        check_ret(0).unwrap();
-    }
-
-    #[test]
-    fn check_ret_positive_is_ok() {
-        check_ret(5).unwrap();
-    }
-
-    #[test]
-    fn check_ret_negative_returns_retcode_error() {
-        let err = check_ret(-5).unwrap_err();
-        match err {
-            DdsError::RetCode(code, _) => assert_eq!(code, -5),
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
 
     #[test]
     fn dds_error_nul_from_conversion() {

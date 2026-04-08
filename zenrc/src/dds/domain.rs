@@ -1,13 +1,13 @@
 use std::ffi::CString;
 use std::sync::Arc;
 
-use crate::error::{check_entity, Result};
-use crate::publisher::Publisher;
-use crate::qos::Qos;
-use crate::subscriber::Subscription;
-use crate::topic::Topic;
-use crate::msg_wrapper::RawMessageBridge;
-use crate::{dds_domainid_t, dds_entity_t};
+use super::error::{check_entity, Result};
+use super::publisher::Publisher;
+use super::qos::Qos;
+use super::subscriber::Subscription;
+use super::topic::Topic;
+use zenrc_dds::RawMessageBridge;
+use zenrc_dds::{dds_domainid_t, dds_entity_t};
 
 /// 让 CycloneDDS 自动选择域 ID（等同于 `DDS_DOMAIN_DEFAULT = UINT32_MAX`）
 pub const DOMAIN_DEFAULT: u32 = u32::MAX;
@@ -20,7 +20,7 @@ pub(crate) struct ParticipantInner {
 
 impl Drop for ParticipantInner {
     fn drop(&mut self) {
-        unsafe { crate::dds_delete(self.entity) };
+        unsafe { zenrc_dds::dds_delete(self.entity) };
     }
 }
 
@@ -37,8 +37,8 @@ unsafe impl Sync for ParticipantInner {}
 ///
 /// # 示例
 /// ```ignore
-/// use zenrc_dds::domain::{DomainParticipant, DOMAIN_DEFAULT};
-/// use zenrc_dds::qos::Qos;
+/// use crate::domain::{DomainParticipant, DOMAIN_DEFAULT};
+/// use crate::qos::Qos;
 ///
 /// let dp = DomainParticipant::new(DOMAIN_DEFAULT).unwrap();
 /// let publisher = dp.create_publisher::<MyMsg>("chatter", Qos::sensor_data()).unwrap();
@@ -61,7 +61,7 @@ impl DomainParticipant {
     pub fn new_with_qos(domain_id: u32, qos: Option<&Qos>) -> Result<Self> {
         let qos_ptr = qos.map(|q| q.raw as *const _).unwrap_or(std::ptr::null());
         let entity = unsafe {
-            crate::dds_create_participant(domain_id as dds_domainid_t, qos_ptr, std::ptr::null())
+            zenrc_dds::dds_create_participant(domain_id as dds_domainid_t, qos_ptr, std::ptr::null())
         };
         let entity = check_entity(entity)?;
         Ok(Self {
@@ -72,8 +72,8 @@ impl DomainParticipant {
     /// 获取域 ID
     pub fn domain_id(&self) -> Result<u32> {
         let mut id: dds_domainid_t = 0;
-        crate::error::check_ret(unsafe {
-            crate::dds_get_domainid(self.inner.entity, &mut id)
+        super::error::check_ret(unsafe {
+            zenrc_dds::dds_get_domainid(self.inner.entity, &mut id)
         })?;
         Ok(id)
     }
@@ -93,7 +93,7 @@ impl DomainParticipant {
     ) -> Result<Topic<T>> {
         let c_name = CString::new(name)?;
         let entity = unsafe {
-            crate::dds_create_topic(
+            zenrc_dds::dds_create_topic(
                 self.inner.entity,
                 T::descriptor(),
                 c_name.as_ptr(),
@@ -122,7 +122,7 @@ impl DomainParticipant {
     ) -> Result<Publisher<T>> {
         let topic = self.create_topic_with_qos::<T>(topic_name, &qos)?;
         let writer = unsafe {
-            crate::dds_create_writer(
+            zenrc_dds::dds_create_writer(
                 self.inner.entity,
                 topic.entity,
                 qos.raw as *const _,
@@ -150,7 +150,7 @@ impl DomainParticipant {
     ) -> Result<Subscription<T>> {
         let topic = self.create_topic_with_qos::<T>(topic_name, &qos)?;
         let reader = unsafe {
-            crate::dds_create_reader(
+            zenrc_dds::dds_create_reader(
                 self.inner.entity,
                 topic.entity,
                 qos.raw as *const _,
@@ -173,9 +173,9 @@ impl DomainParticipant {
         const MAX: usize = 64;
         let mut buf = vec![0i32; MAX];
         let ret = unsafe {
-            crate::dds_lookup_participant(domain_id as dds_domainid_t, buf.as_mut_ptr(), MAX)
+            zenrc_dds::dds_lookup_participant(domain_id as dds_domainid_t, buf.as_mut_ptr(), MAX)
         };
-        let n = crate::error::check_entity(ret)? as usize;
+        let n = super::error::check_entity(ret)? as usize;
         buf.truncate(n);
         Ok(buf)
     }

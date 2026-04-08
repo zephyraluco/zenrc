@@ -60,6 +60,49 @@ struct MsgStruct {
     fields: Vec<(String, CFieldType)>,
 }
 
+/// IDL 常量条目，关联到某个消息类型。
+struct MsgConst {
+    /// 安全 Rust 类型中暴露的常量名（如 `STATUS_UNKNOWN`）
+    name: String,
+    /// 常量类型（如 u32、i32、f64）
+    ty: syn::Type,
+    /// 在 msg_bindings.rs 中的原始标识符（用于转发引用，避免值拷贝）
+    raw_ident: proc_macro2::Ident,
+}
+
+/// 从解析后的 msg_bindings.rs 条目中提取 IDL 常量，按完整结构体标识符（{pkg}_{cat}_{name}）分组。
+///
+/// 通过遍历每个 `_Constants_` 出现位置尝试作为分割点，找到与已知结构体名匹配的最长前缀。
+fn collect_msg_constants(
+    items: &[syn::Item],
+    known_structs: &std::collections::HashSet<String>,
+) -> HashMap<String, Vec<MsgConst>> {
+    let mut map: HashMap<String, Vec<MsgConst>> = HashMap::new();
+    let needle = "_Constants_";
+    for item in items {
+        let syn::Item::Const(c) = item else { continue };
+        let s = c.ident.to_string();
+        // 尝试每个 "_Constants_" 出现位置作为分割点，优先匹配较长的前缀（即最后一个匹配）
+        let mut pos = 0;
+        let mut best: Option<(usize, usize)> = None; // (prefix_end, const_name_start)
+        while let Some(idx) = s[pos..].find(needle) {
+            let abs = pos + idx;
+            if known_structs.contains(&s[..abs]) {
+                best = Some((abs, abs + needle.len()));
+            }
+            pos = abs + needle.len();
+        }
+        if let Some((prefix_end, name_start)) = best {
+            map.entry(s[..prefix_end].to_string()).or_default().push(MsgConst {
+                name: s[name_start..].to_string(),
+                ty: (*c.ty).clone(),
+                raw_ident: c.ident.clone(),
+            });
+        }
+    }
+    map
+}
+
 /// 例如 `std::os::raw::c_char` → `"c_char"`。
 fn last_segment(path: &syn::Path) -> String {
     path.segments
@@ -419,8 +462,12 @@ fn generate_into_raw(key: &str, ty: &CFieldType) -> TokenStream {
         }
     }
 }
-/// 生成单个消息类型的安全包装代码，包括结构体定义和 From/Into 实现
-fn generate_item_wrapper(s: &MsgStruct, name_ident: proc_macro2::Ident) -> TokenStream {
+/// 生成单个消息类型的安全包装代码，包括结构体定义、From/Into 实现以及 IDL 常量 impl 块
+fn generate_item_wrapper(
+    s: &MsgStruct,
+    name_ident: proc_macro2::Ident,
+    constants: &[MsgConst],
+) -> TokenStream {
     let c_name_ident = format_ident!("{}_{}_{}", s.pkg, s.prefix, s.name);
     let desc_ident = format_ident!("{}_{}_{}_desc", s.pkg, s.prefix, s.name);
     let (fields_ts, from_fields, into_stmts): (Vec<TokenStream>, Vec<TokenStream>, Vec<TokenStream>) = s
@@ -440,11 +487,33 @@ fn generate_item_wrapper(s: &MsgStruct, name_ident: proc_macro2::Ident) -> Token
                 (fs, fr, ir)
             },
         );
+    // 生成 IDL 常量 impl 块（可能为空）
+    let const_impl = if constants.is_empty() {
+        quote! {}
+    } else {
+        let const_items: Vec<TokenStream> = constants
+            .iter()
+            .map(|c| {
+                let cname = format_ident!("{}", c.name);
+                let raw = &c.raw_ident;
+                let ty = &c.ty;
+                quote! {
+                    pub const #cname: #ty = crate::#raw;
+                }
+            })
+            .collect();
+        quote! {
+            impl #name_ident {
+                #(#const_items)*
+            }
+        }
+    };
     quote! {
         #[derive(Debug, Clone, Default)]
         pub struct #name_ident {
             #(#fields_ts,)*
         }
+        #const_impl
         // 订阅侧：借用原始 C 消息，转换为安全的 Rust 结构体
         impl<'__r> ::std::convert::From<&'__r crate::#c_name_ident> for #name_ident {
             fn from(raw: &'__r crate::#c_name_ident) -> Self {
@@ -463,15 +532,14 @@ fn generate_item_wrapper(s: &MsgStruct, name_ident: proc_macro2::Ident) -> Token
             }
         }
 
-        impl ::zenrc_dds::msg_wrapper::RawMessageBridge for #name_ident {
+        impl crate::RawMessageBridge for #name_ident {
             type CStruct = crate::#c_name_ident;
 
-            fn descriptor() -> *const ::zenrc_dds::dds_topic_descriptor_t {
+            fn descriptor() -> *const crate::dds_topic_descriptor_t {
                 unsafe { &crate::#desc_ident as *const _ }
             }
 
             fn to_raw(self) -> Self::CStruct {
-                // crate::#c_name_ident::from(self)
                 self.into()
             }
 
@@ -479,10 +547,10 @@ fn generate_item_wrapper(s: &MsgStruct, name_ident: proc_macro2::Ident) -> Token
                 let mut raw = raw;
                 let safe = Self::from(&raw);
                 unsafe {
-                    ::zenrc_dds::dds_sample_free(
+                    crate::dds_sample_free(
                         &mut raw as *mut Self::CStruct as *mut ::std::ffi::c_void,
                         Self::descriptor(),
-                        ::zenrc_dds::dds_free_op_t_DDS_FREE_CONTENTS,
+                        crate::dds_free_op_t_DDS_FREE_CONTENTS,
                     );
                 }
                 safe
@@ -570,6 +638,14 @@ pub fn generate_rust_wrappers(out_dir: &Path) {
         }
     }
 
+    // 构建所有消息结构体标识符集合，供常量分组查找使用
+    let all_struct_idents: std::collections::HashSet<String> = msgs
+        .iter()
+        .map(|s| format!("{}_{}_{}", s.pkg, s.prefix, s.name))
+        .collect();
+    // 从 msg_bindings.rs 中提取并按结构体分组的 IDL 常量
+    let const_map = collect_msg_constants(&file.items, &all_struct_idents);
+
     // <pkg, prefix> → [MsgStruct]，便于后续按消息类别生成模块和类型定义
     let mut by_pkg: BTreeMap<String, BTreeMap<String, Vec<MsgStruct>>> = BTreeMap::new();
     for s in msgs {
@@ -601,7 +677,9 @@ pub fn generate_rust_wrappers(out_dir: &Path) {
                 if let Some((parent, _)) = s.name.split_once('_') {
                     grouped.entry(parent.to_string()).or_default().push(i);
                 } else {
-                    direct_items.push(generate_item_wrapper(s, format_ident!("{}", s.name)));
+                    let key = format!("{}_{}_{}", s.pkg, s.prefix, s.name);
+                    let consts = const_map.get(&key).map(|v| v.as_slice()).unwrap_or(&[]);
+                    direct_items.push(generate_item_wrapper(s, format_ident!("{}", s.name), consts));
                 }
             }
             // 生成各父名子模块
@@ -617,7 +695,9 @@ pub fn generate_rust_wrappers(out_dir: &Path) {
                                 .name
                                 .split_once('_')
                                 .map_or(s.name.as_str(), |(_, sub)| sub);
-                            generate_item_wrapper(s, format_ident!("{}", sub))
+                            let key = format!("{}_{}_{}", s.pkg, s.prefix, s.name);
+                            let consts = const_map.get(&key).map(|v| v.as_slice()).unwrap_or(&[]);
+                            generate_item_wrapper(s, format_ident!("{}", sub), consts)
                         })
                         .collect();
                     quote! { pub mod #parent_ident { #(#sub_items)* } }

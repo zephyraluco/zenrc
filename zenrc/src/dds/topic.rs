@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::dds_entity_t;
+use zenrc_dds::dds_entity_t;
 
 /// 已类型化的 DDS Topic 句柄（仅内部使用）。
 ///
@@ -27,7 +27,7 @@ impl<T> Topic<T> {
 
 impl<T> Drop for Topic<T> {
     fn drop(&mut self) {
-        unsafe { crate::dds_delete(self.entity) };
+        unsafe { zenrc_dds::dds_delete(self.entity) };
     }
 }
 

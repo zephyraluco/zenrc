@@ -5,10 +5,4 @@ edition = "2024"
 
 [dependencies]
 zenrc-dds = { path = "../zenrc-dds" }
-
-[build-dependencies]
-zenrc-dds = { path = "../zenrc-dds" }
-bindgen = "0.72"
-pkg-config = "0.3"
-cc = "1.0"
-sha2 = "0.11"
+thiserror = { workspace = true }

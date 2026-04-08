@@ -1,18 +1,11 @@
-#![allow(non_upper_case_globals)]
-#![allow(non_camel_case_types)]
-#![allow(non_snake_case)]
+mod dds;
 
 use std::thread;
 use std::time::Duration;
 
-use zenrc_dds::domain::DomainParticipant;
-use zenrc_dds::qos::Qos;
-use zenrc_dds::*; // C 绑定类型（供 msg_bindings/generate_types 使用）
-
-include!(concat!(env!("OUT_DIR"), "/msg_bindings.rs"));
-include!(concat!(env!("OUT_DIR"), "/generate_types.rs"));
-
-// ─── main ─────────────────────────────────────────────────────────────────────
+use dds::domain::DomainParticipant;
+use dds::qos::Qos;
+use zenrc_dds::std_msgs;
 
 fn main() {
     let dp = DomainParticipant::new(0).expect("创建域参与者失败");
@@ -41,29 +34,29 @@ fn main() {
         }
     });
 
-    // let sub_handle = thread::spawn(move || {
-    //     loop {
-    //         match subscriber.wait_for_data(Duration::from_millis(500)) {
-    //             Ok(true) => match subscriber.take_one() {
-    //                 Ok(sample) => {
-    //                     if let Some(sample) = sample {
-    //                         println!("Received: {:?}", sample.data);
-    //                     }
-    //                 }
-    //                 Err(e) => {
-    //                     eprintln!("take error: {e:?}");
-    //                     break;
-    //                 }
-    //             },
-    //             Ok(false) => {}
-    //             Err(e) => {
-    //                 eprintln!("wait error: {e:?}");
-    //                 break;
-    //             }
-    //         }
-    //     }
-    // });
+    let sub_handle = thread::spawn(move || {
+        loop {
+            match subscriber.wait_for_data(Duration::from_millis(500)) {
+                Ok(true) => match subscriber.take_one() {
+                    Ok(sample) => {
+                        if let Some(sample) = sample {
+                            println!("Received: {:?}", sample.data);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("take error: {e:?}");
+                        break;
+                    }
+                },
+                Ok(false) => {}
+                Err(e) => {
+                    eprintln!("wait error: {e:?}");
+                    break;
+                }
+            }
+        }
+    });
 
     let _ = pub_handle.join();
-    // let _ = sub_handle.join();
+    let _ = sub_handle.join();
 }

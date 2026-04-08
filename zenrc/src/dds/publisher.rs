@@ -3,12 +3,12 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::domain::ParticipantInner;
-use crate::error::{check_ret, Result};
-use crate::qos::duration_to_nanos;
-use crate::topic::Topic;
-use crate::msg_wrapper::RawMessageBridge;
-use crate::dds_entity_t;
+use super::domain::ParticipantInner;
+use super::error::{check_ret, Result};
+use super::qos::duration_to_nanos;
+use super::topic::Topic;
+use zenrc_dds::RawMessageBridge;
+use zenrc_dds::dds_entity_t;
 
 /// 类型化 DDS 写者（Publisher）。
 ///
@@ -43,7 +43,7 @@ impl<T: RawMessageBridge> Publisher<T> {
     pub fn publish(&self, msg: T) -> Result<()> {
         let raw = msg.to_raw();
         check_ret(unsafe {
-            crate::dds_write(self.writer, &raw as *const _ as *const c_void)
+            zenrc_dds::dds_write(self.writer, &raw as *const _ as *const c_void)
         })
     }
 
@@ -51,7 +51,7 @@ impl<T: RawMessageBridge> Publisher<T> {
     pub fn publish_with_timestamp(&self, msg: T, timestamp_ns: i64) -> Result<()> {
         let raw = msg.to_raw();
         check_ret(unsafe {
-            crate::dds_write_ts(self.writer, &raw as *const _ as *const c_void, timestamp_ns)
+            zenrc_dds::dds_write_ts(self.writer, &raw as *const _ as *const c_void, timestamp_ns)
         })
     }
 
@@ -73,7 +73,7 @@ impl<T: RawMessageBridge> Publisher<T> {
 
 impl<T: RawMessageBridge> Drop for Publisher<T> {
     fn drop(&mut self) {
-        unsafe { crate::dds_delete(self.writer) };
+        unsafe { zenrc_dds::dds_delete(self.writer) };
         // topic 由 self.topic (Topic<T>) 的 Drop 自动删除
     }
 }
