@@ -187,7 +187,9 @@ impl<T: RawMessageBridge> Subscription<T> {
     pub fn wait_for_data(&self, timeout: std::time::Duration) -> Result<bool> {
         let ws = unsafe { zenrc_dds::dds_create_waitset(self._participant.entity) };
         let ws = check_entity(ws)?;
-        let rc = unsafe { zenrc_dds::dds_waitset_attach(ws, self.reader, self.reader as isize) };
+        let cond = unsafe { zenrc_dds::dds_create_readcondition(self.reader, DDS_ANY_STATE) };
+        let cond = check_entity(cond)?;
+        let rc = unsafe { zenrc_dds::dds_waitset_attach(ws, cond, self.reader as isize) };
         check_ret(rc)?;
 
         let timeout_ns = super::qos::duration_to_nanos(timeout);
@@ -261,6 +263,16 @@ impl<T: RawMessageBridge> Subscription<T> {
     /// 返回关联 Topic 的实体句柄
     pub fn topic_entity(&self) -> dds_entity_t {
         self.topic.entity
+    }
+
+    /// 返回所属参与者的实体句柄
+    pub(crate) fn participant_entity(&self) -> dds_entity_t {
+        self._participant.entity
+    }
+
+    /// 返回所属参与者内部引用（用于 stream 模块）
+    pub(crate) fn participant_inner(&self) -> &Arc<ParticipantInner> {
+        &self._participant
     }
 
     // ── 内部实现 ──────────────────────────────────────────────────────────────

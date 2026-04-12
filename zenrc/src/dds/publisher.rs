@@ -4,11 +4,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::domain::ParticipantInner;
-use super::error::{check_ret, Result};
+use super::error::{check_entity, check_ret, Result};
 use super::qos::duration_to_nanos;
 use super::topic::Topic;
 use zenrc_dds::RawMessageBridge;
-use zenrc_dds::dds_entity_t;
+use zenrc_dds::{dds_entity_t, dds_instance_handle_t};
 
 /// 类型化 DDS 写者（Publisher）。
 ///
@@ -68,6 +68,36 @@ impl<T: RawMessageBridge> Publisher<T> {
     /// 返回关联 Topic 的实体句柄
     pub fn topic_entity(&self) -> dds_entity_t {
         self.topic.entity
+    }
+
+    // ── 状态查询 ──────────────────────────────────────────────────────────────
+
+    /// 获取发布匹配状态（有多少订阅者与该写者匹配）
+    pub fn get_publication_status(
+        &self,
+    ) -> Result<zenrc_dds::dds_publication_matched_status_t> {
+        let mut status = unsafe { std::mem::zeroed() };
+        check_ret(unsafe {
+            zenrc_dds::dds_get_publication_matched_status(self.writer, &mut status)
+        })?;
+        Ok(status)
+    }
+
+    /// 检查是否有匹配的读者
+    pub fn has_readers(&self) -> Result<bool> {
+        Ok(self.get_publication_status()?.current_count > 0)
+    }
+
+    /// 获取匹配的订阅者句柄列表
+    pub fn get_subscriptions(&self) -> Result<Vec<dds_instance_handle_t>> {
+        const MAX: usize = 64;
+        let mut handles = vec![0u64; MAX];
+        let ret = unsafe {
+            zenrc_dds::dds_get_matched_subscriptions(self.writer, handles.as_mut_ptr(), MAX)
+        };
+        let n = check_entity(ret)? as usize;
+        handles.truncate(n);
+        Ok(handles)
     }
 }
 
