@@ -103,6 +103,9 @@ pub struct Subscription<T: RawMessageBridge> {
     topic: Topic<T>,
     _participant: Arc<ParticipantInner>,
     _marker: PhantomData<T>,
+    /// 全局调度器的数据到达通知句柄；None 表示调度器未初始化，回退到 spawn_blocking
+    #[cfg(feature = "async")]
+    notify: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl<T: RawMessageBridge> Subscription<T> {
@@ -111,11 +114,15 @@ impl<T: RawMessageBridge> Subscription<T> {
         topic: Topic<T>,
         participant: Arc<ParticipantInner>,
     ) -> Self {
+        #[cfg(feature = "async")]
+        let notify = super::context::attach(reader);
         Self {
             reader,
             topic,
             _participant: participant,
             _marker: PhantomData,
+            #[cfg(feature = "async")]
+            notify,
         }
     }
 
@@ -348,8 +355,62 @@ impl<T: RawMessageBridge> Subscription<T> {
     }
 }
 
+// ─── 异步扩展（feature = "async"）─────────────────────────────────────────────
+
+#[cfg(feature = "async")]
+impl<T: RawMessageBridge + Send + 'static> Subscription<T> {
+    /// 将订阅转换为异步流，每次有新样本时产出 `Result<Sample<T>>`。
+    ///
+    /// 调用后 `Subscription` 所有权转移至后台 tokio 任务，流被 drop 时后台任务自动退出。
+    /// 由共享 WaitSet（[`DdsContext::init`](super::context::DdsContext::init) 初始化）
+    /// 的 `Notify` 驱动，后台无额外轮询线程开销。
+    ///
+    /// # Panics
+    /// 若调用前未执行 `DdsContext::init`，则流会立即结束（`notify` 为 `None`）。
+    pub fn into_stream(self, size: usize) -> super::async_stream::SubscriptionStream<T> {
+        use tokio::sync::mpsc;
+        let (tx, rx) = mpsc::channel::<Result<Sample<T>>>(size);
+
+        let notify = match self.notify.clone() {
+            Some(n) => n,
+            None => {
+                // 调度器未初始化，直接 panic
+                panic!("DdsContext 未初始化，无法创建异步流");
+            }
+        };
+
+        let task = tokio::task::spawn(async move {
+            loop {
+                if tx.is_closed() {
+                    break;
+                }
+                // 等待共享 WaitSet 触发通知
+                notify.notified().await;
+                match self.take(size) {
+                    Ok(samples) => {
+                        for sample in samples {
+                            if tx.send(Ok(sample)).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(e)).await;
+                        break;
+                    }
+                }
+            }
+        });
+
+        super::async_stream::SubscriptionStream::new(rx, task)
+    }
+}
+
 impl<T: RawMessageBridge> Drop for Subscription<T> {
     fn drop(&mut self) {
+        // 先从全局 WaitSet 移除 ReadCondition，再删除 reader 实体
+        #[cfg(feature = "async")]
+        super::context::detach(self.reader);
         unsafe { zenrc_dds::dds_delete(self.reader) };
     }
 }

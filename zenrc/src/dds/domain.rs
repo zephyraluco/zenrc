@@ -149,9 +149,16 @@ impl DomainParticipant {
         qos: Qos,
     ) -> Result<Subscription<T>> {
         let topic = self.create_topic_with_qos::<T>(topic_name, &qos)?;
+        let sub = unsafe {
+            zenrc_dds::dds_create_subscriber(
+                self.inner.entity,
+                qos.raw as *const _,
+                std::ptr::null(),
+            )
+        };
         let reader = unsafe {
             zenrc_dds::dds_create_reader(
-                self.inner.entity,
+                sub,
                 topic.entity,
                 qos.raw as *const _,
                 std::ptr::null(),

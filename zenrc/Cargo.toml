@@ -5,10 +5,10 @@ edition = "2024"
 
 [features]
 default = ["async"]
-async = ["dep:tokio", "dep:futures-core"]
+async = ["dep:tokio", "dep:futures"]
 
 [dependencies]
 zenrc-dds = { path = "../zenrc-dds" }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
-futures-core = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
