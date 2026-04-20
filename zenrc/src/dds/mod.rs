@@ -1,4 +1,3 @@
-pub mod domain;
 pub mod error;
 pub mod qos;
 pub mod publisher;

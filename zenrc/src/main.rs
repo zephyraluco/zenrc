@@ -2,22 +2,19 @@ mod dds;
 
 use std::time::Duration;
 use dds::context::DdsContext;
-use dds::domain::DomainParticipant;
 use dds::qos::Qos;
 use futures::StreamExt;
 use zenrc_dds::std_msgs;
 
 #[tokio::main]
 async fn main() {
-    let dp = DomainParticipant::new(0).expect("创建域参与者失败");
+    // DdsContext 同时创建域参与者和后台 WaitSet 轮询线程
+    let ctx = DdsContext::new(0).expect("创建 DDS 上下文失败");
 
-    // ── 先初始化调度器，之后创建的订阅者会自动附加到共享 WaitSet ─────────────
-    let _ctx = DdsContext::init(&dp).expect("初始化 DDS 上下文失败");
-
-    let publisher = dp
+    let publisher = ctx
         .create_publisher::<std_msgs::msg::String>("rt/test_string", Qos::sensor_data())
         .expect("创建发布者失败");
-    let subscriber = dp
+    let subscriber = ctx
         .create_subscription::<std_msgs::msg::String>("rt/test_string", Qos::sensor_data())
         .expect("创建订阅者失败");
 

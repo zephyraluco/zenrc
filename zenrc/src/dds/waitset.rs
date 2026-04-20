@@ -1,7 +1,6 @@
-use std::sync::Arc;
 use std::time::Duration;
 
-use super::domain::{ParticipantInner,DomainParticipant};
+use super::context::DomainParticipant;
 use super::error::{check_entity, check_ret, DdsError, Result};
 use super::publisher::Publisher;
 use super::qos::duration_to_nanos;
@@ -31,7 +30,6 @@ pub type WaitResult = Vec<dds_attach_t>;
 /// ```
 pub struct WaitSet {
     entity: dds_entity_t,
-    _participant: Arc<ParticipantInner>,
 }
 
 impl WaitSet {
@@ -39,10 +37,7 @@ impl WaitSet {
     pub fn new(participant: &DomainParticipant) -> Result<Self> {
         let entity = unsafe { zenrc_dds::dds_create_waitset(participant.entity()) };
         let entity = check_entity(entity)?;
-        Ok(Self {
-            entity,
-            _participant: Arc::clone(&participant.inner),
-        })
+        Ok(Self { entity })
     }
 
     // ── 附加条件 ──────────────────────────────────────────────────────────────

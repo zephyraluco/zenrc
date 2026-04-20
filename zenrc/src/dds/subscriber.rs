@@ -3,7 +3,6 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use super::domain::ParticipantInner;
 use super::error::{check_entity, check_ret, DdsError, Result};
 use super::topic::Topic;
 use zenrc_dds::RawMessageBridge;
@@ -101,28 +100,54 @@ impl<T: RawMessageBridge> Drop for Sample<T> {
 pub struct Subscription<T: RawMessageBridge> {
     reader: dds_entity_t,
     topic: Topic<T>,
-    _participant: Arc<ParticipantInner>,
     _marker: PhantomData<T>,
-    /// 全局调度器的数据到达通知句柄；None 表示调度器未初始化，回退到 spawn_blocking
+    /// 异步通知句柄；None 表示该订阅不属于任何 DdsContext
     #[cfg(feature = "async")]
     notify: Option<Arc<tokio::sync::Notify>>,
+    /// 所属上下文的内核引用，用于 drop 时移除 ReadCondition
+    #[cfg(feature = "async")]
+    context: Option<Arc<super::context::ContextCore>>,
 }
 
 impl<T: RawMessageBridge> Subscription<T> {
     pub(crate) fn new(
         reader: dds_entity_t,
         topic: Topic<T>,
-        participant: Arc<ParticipantInner>,
     ) -> Self {
-        #[cfg(feature = "async")]
-        let notify = super::context::attach(reader);
         Self {
             reader,
             topic,
-            _participant: participant,
+            _marker: PhantomData,
+            #[cfg(feature = "async")]
+            notify: None,
+            #[cfg(feature = "async")]
+            context: None,
+        }
+    }
+
+    /// 创建订阅者并附加到指定上下文的 WaitSet，支持异步流。
+    ///
+    /// 由 [`DdsContext::create_subscription`](super::context::DdsContext::create_subscription) 调用。
+    pub(crate) fn with_context(
+        reader: dds_entity_t,
+        topic: Topic<T>,
+        context: Arc<super::context::ContextCore>,
+    ) -> Self {
+        #[cfg(feature = "async")]
+        let (notify, context_opt) = {
+            let n = context.attach(reader);
+            (n, Some(context))
+        };
+        #[cfg(not(feature = "async"))]
+        let _ = context;
+        Self {
+            reader,
+            topic,
             _marker: PhantomData,
             #[cfg(feature = "async")]
             notify,
+            #[cfg(feature = "async")]
+            context: context_opt,
         }
     }
 
@@ -192,7 +217,8 @@ impl<T: RawMessageBridge> Subscription<T> {
 
     /// 阻塞等待直到有数据可读（超时后返回 Ok(false)）
     pub fn wait_for_data(&self, timeout: std::time::Duration) -> Result<bool> {
-        let ws = unsafe { zenrc_dds::dds_create_waitset(self._participant.entity) };
+        // 以 reader 为父实体创建临时 WaitSet，CycloneDDS 允许任意实体作为父
+        let ws = unsafe { zenrc_dds::dds_create_waitset(self.reader) };
         let ws = check_entity(ws)?;
         let cond = unsafe { zenrc_dds::dds_create_readcondition(self.reader, DDS_ANY_STATE) };
         let cond = check_entity(cond)?;
@@ -270,16 +296,6 @@ impl<T: RawMessageBridge> Subscription<T> {
     /// 返回关联 Topic 的实体句柄
     pub fn topic_entity(&self) -> dds_entity_t {
         self.topic.entity
-    }
-
-    /// 返回所属参与者的实体句柄
-    pub(crate) fn participant_entity(&self) -> dds_entity_t {
-        self._participant.entity
-    }
-
-    /// 返回所属参与者内部引用（用于 stream 模块）
-    pub(crate) fn participant_inner(&self) -> &Arc<ParticipantInner> {
-        &self._participant
     }
 
     // ── 内部实现 ──────────────────────────────────────────────────────────────
@@ -375,7 +391,7 @@ impl<T: RawMessageBridge + Send + 'static> Subscription<T> {
             Some(n) => n,
             None => {
                 // 调度器未初始化，直接 panic
-                panic!("DdsContext 未初始化，无法创建异步流");
+        panic!("此 Subscription 不属于任何 DdsContext，无法创建异步流");
             }
         };
 
@@ -408,9 +424,11 @@ impl<T: RawMessageBridge + Send + 'static> Subscription<T> {
 
 impl<T: RawMessageBridge> Drop for Subscription<T> {
     fn drop(&mut self) {
-        // 先从全局 WaitSet 移除 ReadCondition，再删除 reader 实体
+        // 先从对应 WaitSet 移除 ReadCondition，再删除 reader 实体
         #[cfg(feature = "async")]
-        super::context::detach(self.reader);
+        if let Some(ctx) = &self.context {
+            ctx.detach(self.reader);
+        }
         unsafe { zenrc_dds::dds_delete(self.reader) };
     }
 }

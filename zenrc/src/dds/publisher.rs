@@ -1,9 +1,7 @@
 use std::ffi::c_void;
 use std::marker::PhantomData;
-use std::sync::Arc;
 use std::time::Duration;
 
-use super::domain::ParticipantInner;
 use super::error::{check_entity, check_ret, Result};
 use super::qos::duration_to_nanos;
 use super::topic::Topic;
@@ -15,11 +13,11 @@ use zenrc_dds::{dds_entity_t, dds_instance_handle_t};
 /// 对应 ROS2 的 `rclcpp::Publisher`。持有 DDS writer 实体和对应的 Topic 实体；
 /// Drop 时按顺序删除 writer → topic。
 ///
-/// 通过 [`crate::domain::DomainParticipant::create_publisher`] 创建。
+/// 通过 [`DdsContext::create_publisher`](super::context::DdsContext::create_publisher) 创建。
+/// 生命周期须短于创建它的 [`DdsContext`](super::context::DdsContext)。
 pub struct Publisher<T: RawMessageBridge> {
     writer: dds_entity_t,
     topic: Topic<T>,
-    _participant: Arc<ParticipantInner>,
     _marker: PhantomData<T>,
 }
 
@@ -27,12 +25,10 @@ impl<T: RawMessageBridge> Publisher<T> {
     pub(crate) fn new(
         writer: dds_entity_t,
         topic: Topic<T>,
-        participant: Arc<ParticipantInner>,
     ) -> Self {
         Self {
             writer,
             topic,
-            _participant: participant,
             _marker: PhantomData,
         }
     }
