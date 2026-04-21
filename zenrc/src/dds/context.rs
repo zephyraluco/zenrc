@@ -17,22 +17,6 @@ use super::topic::Topic;
 /// 让 CycloneDDS 自动选择域 ID（等同于 `DDS_DOMAIN_DEFAULT = UINT32_MAX`）
 pub const DOMAIN_DEFAULT: u32 = u32::MAX;
 
-// ─── ParticipantInner ─────────────────────────────────────────────────────────
-
-pub(crate) struct ParticipantInner {
-    pub entity: dds_entity_t,
-}
-
-impl Drop for ParticipantInner {
-    fn drop(&mut self) {
-        unsafe { zenrc_dds::dds_delete(self.entity) };
-    }
-}
-
-// SAFETY: dds_entity_t 是线程安全的 i32 句柄
-unsafe impl Send for ParticipantInner {}
-unsafe impl Sync for ParticipantInner {}
-
 // ─── DomainParticipant ────────────────────────────────────────────────────────
 
 /// DDS 域参与者（Domain Participant），是创建 Publisher 和 Subscription 的工厂。
@@ -41,7 +25,7 @@ unsafe impl Sync for ParticipantInner {}
 /// 通常通过 [`DdsContext::new`] 隐式创建，可通过 `ctx.participant` 访问。
 #[derive(Clone)]
 pub struct DomainParticipant {
-    pub(crate) inner: Arc<ParticipantInner>,
+    entity: dds_entity_t,
 }
 
 impl DomainParticipant {
@@ -58,7 +42,7 @@ impl DomainParticipant {
         };
         let entity = check_entity(entity)?;
         Ok(Self {
-            inner: Arc::new(ParticipantInner { entity }),
+            entity
         })
     }
 
@@ -66,7 +50,7 @@ impl DomainParticipant {
     pub fn domain_id(&self) -> Result<u32> {
         let mut id: dds_domainid_t = 0;
         super::error::check_ret(unsafe {
-            zenrc_dds::dds_get_domainid(self.inner.entity, &mut id)
+            zenrc_dds::dds_get_domainid(self.entity, &mut id)
         })?;
         Ok(id)
     }
@@ -85,7 +69,7 @@ impl DomainParticipant {
         let c_name = CString::new(name)?;
         let entity = unsafe {
             zenrc_dds::dds_create_topic(
-                self.inner.entity,
+                self.entity,
                 T::descriptor(),
                 c_name.as_ptr(),
                 qos.raw as *const _,
@@ -105,7 +89,7 @@ impl DomainParticipant {
         let topic = self.create_topic_with_qos::<T>(topic_name, &qos)?;
         let writer = unsafe {
             zenrc_dds::dds_create_writer(
-                self.inner.entity,
+                self.entity,
                 topic.entity,
                 qos.raw as *const _,
                 std::ptr::null(),
@@ -124,7 +108,7 @@ impl DomainParticipant {
         let topic = self.create_topic_with_qos::<T>(topic_name, &qos)?;
         let sub = unsafe {
             zenrc_dds::dds_create_subscriber(
-                self.inner.entity,
+                self.entity,
                 qos.raw as *const _,
                 std::ptr::null(),
             )
@@ -143,7 +127,7 @@ impl DomainParticipant {
 
     /// 返回底层 DDS 参与者实体句柄
     pub fn entity(&self) -> dds_entity_t {
-        self.inner.entity
+        self.entity
     }
 
     /// 查找同域内的所有参与者实体
@@ -184,7 +168,6 @@ pub(crate) struct ContextCore {
     waitset: dds_entity_t,
     guard: dds_entity_t,
     running: AtomicBool,
-    _participant: Arc<ParticipantInner>,
     /// token（reader entity as isize）→ ReaderEntry
     readers: Mutex<HashMap<isize, ReaderEntry>>,
 }
@@ -335,7 +318,6 @@ impl DdsContext {
             waitset: ws,
             guard,
             running: AtomicBool::new(true),
-            _participant: Arc::clone(&participant.inner),
             readers: Mutex::new(HashMap::new()),
         });
 

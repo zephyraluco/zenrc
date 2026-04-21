@@ -3,13 +3,13 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use super::error::{check_entity, check_ret, DdsError, Result};
-use super::topic::Topic;
-use zenrc_dds::RawMessageBridge;
 use zenrc_dds::{
-    dds_entity_t, dds_instance_handle_t, dds_sample_info_t, dds_time_t,
-    DDS_ANY_STATE,
+    DDS_ANY_STATE, RawMessageBridge, dds_entity_t, dds_instance_handle_t, dds_sample_info_t,
+    dds_time_t,
 };
+
+use super::error::{DdsError, Result, check_entity, check_ret};
+use super::topic::Topic;
 
 // ─── SampleInfo ────────────────────────────────────────────────────────────────
 
@@ -101,27 +101,22 @@ pub struct Subscription<T: RawMessageBridge> {
     reader: dds_entity_t,
     topic: Topic<T>,
     _marker: PhantomData<T>,
+    /// 所属上下文的内核引用，用于 drop 时移除 ReadCondition
+    context: Option<Arc<super::context::ContextCore>>,
     /// 异步通知句柄；None 表示该订阅不属于任何 DdsContext
     #[cfg(feature = "async")]
     notify: Option<Arc<tokio::sync::Notify>>,
-    /// 所属上下文的内核引用，用于 drop 时移除 ReadCondition
-    #[cfg(feature = "async")]
-    context: Option<Arc<super::context::ContextCore>>,
 }
 
 impl<T: RawMessageBridge> Subscription<T> {
-    pub(crate) fn new(
-        reader: dds_entity_t,
-        topic: Topic<T>,
-    ) -> Self {
+    pub(crate) fn new(reader: dds_entity_t, topic: Topic<T>) -> Self {
         Self {
             reader,
             topic,
             _marker: PhantomData,
+            context: None,
             #[cfg(feature = "async")]
             notify: None,
-            #[cfg(feature = "async")]
-            context: None,
         }
     }
 
@@ -134,20 +129,17 @@ impl<T: RawMessageBridge> Subscription<T> {
         context: Arc<super::context::ContextCore>,
     ) -> Self {
         #[cfg(feature = "async")]
-        let (notify, context_opt) = {
+        let notify = {
             let n = context.attach(reader);
-            (n, Some(context))
+            n
         };
-        #[cfg(not(feature = "async"))]
-        let _ = context;
         Self {
             reader,
             topic,
             _marker: PhantomData,
+            context: Some(context),
             #[cfg(feature = "async")]
             notify,
-            #[cfg(feature = "async")]
-            context: context_opt,
         }
     }
 
@@ -197,8 +189,7 @@ impl<T: RawMessageBridge> Subscription<T> {
             .iter_mut()
             .map(|s| s as *mut T::CStruct as *mut c_void)
             .collect();
-        let mut infos: Vec<dds_sample_info_t> =
-            vec![unsafe { std::mem::zeroed() }; max];
+        let mut infos: Vec<dds_sample_info_t> = vec![unsafe { std::mem::zeroed() }; max];
 
         let n = unsafe {
             zenrc_dds::dds_peek(
@@ -211,34 +202,6 @@ impl<T: RawMessageBridge> Subscription<T> {
         };
 
         self.collect_samples(n, raw_samples, infos)
-    }
-
-    // ── 等待有数据 ─────────────────────────────────────────────────────────────
-
-    /// 阻塞等待直到有数据可读（超时后返回 Ok(false)）
-    pub fn wait_for_data(&self, timeout: std::time::Duration) -> Result<bool> {
-        // 以 reader 为父实体创建临时 WaitSet，CycloneDDS 允许任意实体作为父
-        let ws = unsafe { zenrc_dds::dds_create_waitset(self.reader) };
-        let ws = check_entity(ws)?;
-        let cond = unsafe { zenrc_dds::dds_create_readcondition(self.reader, DDS_ANY_STATE) };
-        let cond = check_entity(cond)?;
-        let rc = unsafe { zenrc_dds::dds_waitset_attach(ws, cond, self.reader as isize) };
-        check_ret(rc)?;
-
-        let timeout_ns = super::qos::duration_to_nanos(timeout);
-        let mut attach: zenrc_dds::dds_attach_t = 0;
-        let n =
-            unsafe { zenrc_dds::dds_waitset_wait(ws, &mut attach, 1, timeout_ns) };
-
-        unsafe { zenrc_dds::dds_delete(ws) };
-
-        if n == 0 {
-            Ok(false)
-        } else if n > 0 {
-            Ok(true)
-        } else {
-            Err(DdsError::RetCode(n as i32, "waitset_wait failed".into()))
-        }
     }
 
     // ── 状态查询 ──────────────────────────────────────────────────────────────
@@ -257,9 +220,7 @@ impl<T: RawMessageBridge> Subscription<T> {
     /// 获取样本丢失状态
     pub fn sample_lost_status(&self) -> Result<zenrc_dds::dds_sample_lost_status_t> {
         let mut status = unsafe { std::mem::zeroed() };
-        check_ret(unsafe {
-            zenrc_dds::dds_get_sample_lost_status(self.reader, &mut status)
-        })?;
+        check_ret(unsafe { zenrc_dds::dds_get_sample_lost_status(self.reader, &mut status) })?;
         Ok(status)
     }
 
@@ -276,10 +237,7 @@ impl<T: RawMessageBridge> Subscription<T> {
     }
 
     /// 等待历史数据到达（对 TransientLocal/Transient/Persistent 持久性有效）
-    pub fn wait_for_historical_data(
-        &self,
-        max_wait: std::time::Duration,
-    ) -> Result<()> {
+    pub fn wait_for_historical_data(&self, max_wait: std::time::Duration) -> Result<()> {
         check_ret(unsafe {
             zenrc_dds::dds_reader_wait_for_historical_data(
                 self.reader,
@@ -300,12 +258,7 @@ impl<T: RawMessageBridge> Subscription<T> {
 
     // ── 内部实现 ──────────────────────────────────────────────────────────────
 
-    fn read_or_take(
-        &self,
-        max: usize,
-        mask: u32,
-        take: bool,
-    ) -> Result<Vec<Sample<T>>> {
+    fn read_or_take(&self, max: usize, mask: u32, take: bool) -> Result<Vec<Sample<T>>> {
         if max == 0 {
             return Ok(Vec::new());
         }
@@ -316,8 +269,7 @@ impl<T: RawMessageBridge> Subscription<T> {
             .iter_mut()
             .map(|s| s as *mut T::CStruct as *mut c_void)
             .collect();
-        let mut infos: Vec<dds_sample_info_t> =
-            vec![unsafe { std::mem::zeroed() }; max];
+        let mut infos: Vec<dds_sample_info_t> = vec![unsafe { std::mem::zeroed() }; max];
 
         let n = unsafe {
             if take {
@@ -383,15 +335,17 @@ impl<T: RawMessageBridge + Send + 'static> Subscription<T> {
     ///
     /// # Panics
     /// 若调用前未执行 `DdsContext::init`，则流会立即结束（`notify` 为 `None`）。
-    pub fn into_stream(self, size: usize) -> super::async_stream::SubscriptionStream<T> {
+    pub fn into_stream(self, size: usize) -> Result<super::async_stream::SubscriptionStream<T>> {
         use tokio::sync::mpsc;
         let (tx, rx) = mpsc::channel::<Result<Sample<T>>>(size);
 
         let notify = match self.notify.clone() {
             Some(n) => n,
             None => {
-                // 调度器未初始化，直接 panic
-        panic!("此 Subscription 不属于任何 DdsContext，无法创建异步流");
+                // 没有 Notify 驱动，无法异步等待，立即返回 None
+                return Err(DdsError::NullPtr(
+                    "订阅未附加到任何 DdsContext，无法创建异步流".into(),
+                ));
             }
         };
 
@@ -418,7 +372,7 @@ impl<T: RawMessageBridge + Send + 'static> Subscription<T> {
             }
         });
 
-        super::async_stream::SubscriptionStream::new(rx, task)
+        Ok(super::async_stream::SubscriptionStream::new(rx, task))
     }
 }
 

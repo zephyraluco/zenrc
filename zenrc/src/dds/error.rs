@@ -9,11 +9,11 @@ pub enum DdsError {
 
     /// 字符串包含内部 NUL 字节
     #[error("字符串包含 NUL 字节: {0}")]
-    Nul(#[from] std::ffi::NulError),
+    NullStr(#[from] std::ffi::NulError),
 
-    /// 无效 UTF-8
-    #[error("UTF-8 错误: {0}")]
-    Utf8(#[from] std::str::Utf8Error),
+    /// 空指针异常
+    #[error("空指针异常: {0}")]
+    NullPtr(String),
 }
 
 pub type Result<T, E = DdsError> = std::result::Result<T, E>;
@@ -51,23 +51,4 @@ fn dds_err(code: i32) -> DdsError {
         }
     };
     DdsError::RetCode(code, msg)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dds_error_nul_from_conversion() {
-        let nul_err = std::ffi::CString::new("ab\0cd").unwrap_err();
-        let err = DdsError::Nul(nul_err);
-        assert!(err.to_string().contains("NUL"));
-    }
-
-    #[test]
-    fn dds_error_utf8_from_conversion() {
-        let utf8_err = std::str::from_utf8(&[0xFF, 0xFE]).unwrap_err();
-        let err = DdsError::Utf8(utf8_err);
-        assert!(!err.to_string().is_empty());
-    }
 }

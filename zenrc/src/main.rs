@@ -22,7 +22,7 @@ async fn main() {
 
     // ── 订阅任务：将订阅者转为异步流，由调度器后台线程驱动 ─────────────────────
     tokio::spawn(async move {
-        let mut stream = subscriber.into_stream(32);
+        let mut stream = subscriber.into_stream(32).unwrap();
         while let Some(result) = stream.next().await {
             match result {
                 Ok(sample) => println!("收到: {:?}", sample.data),
