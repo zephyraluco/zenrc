@@ -101,8 +101,6 @@ pub struct Subscription<T: RawMessageBridge> {
     reader: dds_entity_t,
     topic: Topic<T>,
     _marker: PhantomData<T>,
-    /// 所属上下文的内核引用，用于 drop 时移除 ReadCondition
-    context: Option<Arc<super::context::ContextCore>>,
     /// 异步通知句柄；None 表示该订阅不属于任何 DdsContext
     #[cfg(feature = "async")]
     notify: Option<Arc<tokio::sync::Notify>>,
@@ -114,30 +112,25 @@ impl<T: RawMessageBridge> Subscription<T> {
             reader,
             topic,
             _marker: PhantomData,
-            context: None,
             #[cfg(feature = "async")]
             notify: None,
         }
     }
 
-    /// 创建订阅者并附加到指定上下文的 WaitSet，支持异步流。
+    /// 创建订阅者并附加到指定 DdsContext 的 WaitSet，支持异步流。
     ///
     /// 由 [`DdsContext::create_subscription`](super::context::DdsContext::create_subscription) 调用。
     pub(crate) fn with_context(
         reader: dds_entity_t,
         topic: Topic<T>,
-        context: Arc<super::context::ContextCore>,
+        context: &super::context::DdsContext,
     ) -> Self {
         #[cfg(feature = "async")]
-        let notify = {
-            let n = context.attach(reader);
-            n
-        };
+        let notify = Some(context.attach(reader));
         Self {
             reader,
             topic,
             _marker: PhantomData,
-            context: Some(context),
             #[cfg(feature = "async")]
             notify,
         }
@@ -378,11 +371,8 @@ impl<T: RawMessageBridge + Send + 'static> Subscription<T> {
 
 impl<T: RawMessageBridge> Drop for Subscription<T> {
     fn drop(&mut self) {
-        // 先从对应 WaitSet 移除 ReadCondition，再删除 reader 实体
-        #[cfg(feature = "async")]
-        if let Some(ctx) = &self.context {
-            ctx.detach(self.reader);
-        }
+        // 直接删除 reader 实体；后台线程会在下一轮循环检测到 reader 已失效，
+        // 自动将对应 ReadCondition 从 WaitSet 上移除并释放
         unsafe { zenrc_dds::dds_delete(self.reader) };
     }
 }

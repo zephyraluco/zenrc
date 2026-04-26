@@ -164,85 +164,7 @@ struct ReaderEntry {
     notify: Arc<tokio::sync::Notify>,
 }
 
-pub(crate) struct ContextCore {
-    waitset: dds_entity_t,
-    guard: dds_entity_t,
-    running: AtomicBool,
-    /// token（reader entity as isize）→ ReaderEntry
-    readers: Mutex<HashMap<isize, ReaderEntry>>,
-}
 
-// SAFETY: dds_entity_t 是 i32 句柄，CycloneDDS 所有操作均线程安全
-unsafe impl Send for ContextCore {}
-unsafe impl Sync for ContextCore {}
-
-impl Drop for ContextCore {
-    fn drop(&mut self) {
-        // 后台线程已由 DdsContext::drop 中的 join() 确认退出，可安全清理 DDS 资源
-        if let Ok(readers) = self.readers.lock() {
-            for entry in readers.values() {
-                unsafe { zenrc_dds::dds_delete(entry.readcond) };
-            }
-        }
-        unsafe { zenrc_dds::dds_delete(self.waitset) };
-        unsafe { zenrc_dds::dds_delete(self.guard) };
-    }
-}
-
-impl ContextCore {
-    /// 将 reader 的 ReadCondition 附加到 WaitSet，返回数据到达通知句柄。
-    ///
-    /// 由 [`DdsContext::create_subscription`] 在构造 [`Subscription`] 时自动调用。
-    #[cfg(feature = "async")]
-    pub(crate) fn attach(&self, reader: dds_entity_t) -> Option<Arc<tokio::sync::Notify>> {
-        let readcond = check_entity(unsafe {
-            zenrc_dds::dds_create_readcondition(reader, DDS_ANY_STATE)
-        })
-        .ok()?;
-
-        let notify = Arc::new(tokio::sync::Notify::new());
-        let token = reader as isize;
-
-        {
-            let mut readers = self.readers.lock().unwrap();
-            readers.insert(
-                token,
-                ReaderEntry {
-                    readcond,
-                    notify: Arc::clone(&notify),
-                },
-            );
-        }
-
-        if check_ret(unsafe {
-            zenrc_dds::dds_waitset_attach(self.waitset, readcond, token)
-        })
-        .is_err()
-        {
-            self.readers.lock().unwrap().remove(&token);
-            unsafe { zenrc_dds::dds_delete(readcond) };
-            return None;
-        }
-
-        // 唤醒后台线程以感知新附加的 ReadCondition
-        unsafe { zenrc_dds::dds_set_guardcondition(self.guard, true) };
-
-        Some(notify)
-    }
-
-    /// 从 WaitSet 移除 reader 的 ReadCondition。
-    ///
-    /// 由 [`Subscription::drop`](super::subscriber::Subscription) 自动调用。
-    #[cfg(feature = "async")]
-    pub(crate) fn detach(&self, reader: dds_entity_t) {
-        let token = reader as isize;
-        let entry = self.readers.lock().unwrap().remove(&token);
-        if let Some(entry) = entry {
-            unsafe { zenrc_dds::dds_waitset_detach(self.waitset, entry.readcond) };
-            unsafe { zenrc_dds::dds_delete(entry.readcond) };
-        }
-    }
-}
 
 // ─── DdsContext ────────────────────────────────────────────────────────────────
 
@@ -267,13 +189,15 @@ impl ContextCore {
 /// ```
 pub struct DdsContext {
     /// 域参与者；也可直接用于同步操作（创建的 Subscription 不会附加到 WaitSet）
-    pub participant: DomainParticipant,
-    pub(crate) core: Arc<ContextCore>,
+    participant: DomainParticipant,
+    waitset: dds_entity_t,
+    guard: dds_entity_t,
+    running: Arc<AtomicBool>,
+    #[cfg(feature = "async")]
+    pending: Arc<Mutex<Vec<(dds_entity_t, Arc<tokio::sync::Notify>)>>>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
-// SAFETY: DomainParticipant（Arc<ParticipantInner>）Send+Sync；
-//         Arc<ContextCore> Send+Sync；thread 只在 drop(&mut self) 中访问
 unsafe impl Send for DdsContext {}
 unsafe impl Sync for DdsContext {}
 
@@ -314,22 +238,35 @@ impl DdsContext {
             return Err(e);
         }
 
-        let core = Arc::new(ContextCore {
-            waitset: ws,
-            guard,
-            running: AtomicBool::new(true),
-            readers: Mutex::new(HashMap::new()),
-        });
+        let running = Arc::new(AtomicBool::new(true));
+        #[cfg(feature = "async")]
+        let pending = Arc::new(Mutex::new(Vec::<(dds_entity_t, Arc<tokio::sync::Notify>)>::new()));
 
-        let core_thread = Arc::clone(&core);
-        let handle = thread::Builder::new()
-            .name("dds-context".into())
-            .spawn(move || context_loop(core_thread))
-            .map_err(|e| DdsError::RetCode(-1, format!("创建上下文线程失败: {e}")))?;
+        let handle = {
+            let running = Arc::clone(&running);
+            #[cfg(feature = "async")]
+            let pending = Arc::clone(&pending);
+            thread::Builder::new()
+                .name("dds-context".into())
+                .spawn(move || {
+                    context_loop(
+                        ws,
+                        guard,
+                        running,
+                        #[cfg(feature = "async")]
+                        pending,
+                    )
+                })
+                .map_err(|e| DdsError::RetCode(-1, format!("创建上下文线程失败: {e}")))?
+        };
 
         Ok(Self {
             participant,
-            core,
+            waitset: ws,
+            guard,
+            running,
+            #[cfg(feature = "async")]
+            pending,
             thread: Some(handle),
         })
     }
@@ -411,34 +348,95 @@ impl DdsContext {
                 std::ptr::null(),
             )
         })?;
-        Ok(Subscription::with_context(
-            reader,
-            topic,
-            Arc::clone(&self.core),
-        ))
+        Ok(Subscription::with_context(reader, topic, self))
+    }
+
+    /// 将 reader 加入待处理队列，由后台线程在下一轮循环创建 ReadCondition 并附加到 WaitSet。
+    ///
+    /// 由 [`DdsContext::create_subscription`] 在构造 [`Subscription`] 时自动调用。
+    #[cfg(feature = "async")]
+    pub(crate) fn attach(&self, reader: dds_entity_t) -> Arc<tokio::sync::Notify> {
+        let notify = Arc::new(tokio::sync::Notify::new());
+        self.pending.lock().unwrap().push((reader, Arc::clone(&notify)));
+        // 唤醒后台线程，使其尽快处理新增 reader
+        unsafe { zenrc_dds::dds_set_guardcondition(self.guard, true) };
+        notify
     }
 }
 
 impl Drop for DdsContext {
     fn drop(&mut self) {
-        self.core.running.store(false, Ordering::Release);
+        self.running.store(false, Ordering::Release);
         // 唤醒阻塞中的 dds_waitset_wait，使后台线程尽快检测到退出标志
-        unsafe { zenrc_dds::dds_set_guardcondition(self.core.guard, true) };
+        unsafe { zenrc_dds::dds_set_guardcondition(self.guard, true) };
         if let Some(handle) = self.thread.take() {
             let _ = handle.join();
         }
+        // 后台线程已退出，安全清理 DDS 资源
+        unsafe { zenrc_dds::dds_delete(self.waitset) };
+        unsafe { zenrc_dds::dds_delete(self.guard) };
     }
 }
 
 // ─── 后台轮询 ─────────────────────────────────────────────────────────────────
 
 /// 在后台 OS 线程中持续轮询 WaitSet，有条件触发时唤醒对应订阅者的 Notify。
-fn context_loop(core: Arc<ContextCore>) {
-    while core.running.load(Ordering::Acquire) {
+fn context_loop(
+    waitset: dds_entity_t,
+    guard: dds_entity_t,
+    running: Arc<AtomicBool>,
+    #[cfg(feature = "async")] pending: Arc<Mutex<Vec<(dds_entity_t, Arc<tokio::sync::Notify>)>>>,
+) {
+    let mut readers: HashMap<isize, ReaderEntry> = HashMap::new();
+
+    while running.load(Ordering::Acquire) {
+        // ── 处理新增 reader：创建 ReadCondition 并附加到 WaitSet ───────────────
+        #[cfg(feature = "async")]
+        {
+            let new_readers: Vec<_> = pending.lock().unwrap().drain(..).collect();
+            for (reader, notify) in new_readers {
+                let token = reader as isize;
+                let readcond = match check_entity(unsafe {
+                    zenrc_dds::dds_create_readcondition(reader, DDS_ANY_STATE)
+                }) {
+                    Ok(rc) => rc,
+                    Err(_) => continue,
+                };
+                if check_ret(unsafe {
+                    zenrc_dds::dds_waitset_attach(waitset, readcond, token)
+                })
+                .is_err()
+                {
+                    unsafe { zenrc_dds::dds_delete(readcond) };
+                    continue;
+                }
+                readers.insert(token, ReaderEntry { readcond, notify });
+            }
+        }
+
+        // ── 每次循环先扫描已失效的订阅者，更新 WaitSet ─────────────────────────
+        {
+            // 收集 reader 实体已被删除的条目（dds_get_parent 返回负值表示实体无效）
+            let stale: Vec<isize> = readers
+                .iter()
+                .filter(|&(&token, _)| unsafe {
+                    zenrc_dds::dds_get_parent(token as dds_entity_t) < 0
+                })
+                .map(|(&token, _)| token)
+                .collect();
+            for token in stale {
+                if let Some(entry) = readers.remove(&token) {
+                    // 从 WaitSet 移除对应 ReadCondition 并释放
+                    unsafe { zenrc_dds::dds_waitset_detach(waitset, entry.readcond) };
+                    unsafe { zenrc_dds::dds_delete(entry.readcond) };
+                }
+            }
+        }
+
         let mut xs: Vec<dds_attach_t> = vec![0; MAX_TRIGGERS];
         let n = unsafe {
             zenrc_dds::dds_waitset_wait(
-                core.waitset,
+                waitset,
                 xs.as_mut_ptr(),
                 MAX_TRIGGERS,
                 POLL_TIMEOUT_NS,
@@ -456,22 +454,24 @@ fn context_loop(core: Arc<ContextCore>) {
         for token in xs {
             if token == WAKE_TOKEN {
                 // 重置守护条件，避免持续触发
-                unsafe { zenrc_dds::dds_set_guardcondition(core.guard, false) };
+                unsafe { zenrc_dds::dds_set_guardcondition(guard, false) };
                 continue;
             }
 
-            // 唤醒对应订阅者：短暂持锁取 Arc<Notify>，在锁外调用，防止死锁
+            // 唤醒对应订阅者：取 Arc<Notify> 后在锁外调用，防止死锁
             #[cfg(feature = "async")]
             {
-                let notify = {
-                    let readers = core.readers.lock().unwrap();
-                    readers.get(&token).map(|e| Arc::clone(&e.notify))
-                };
+                let notify = readers.get(&token).map(|e| Arc::clone(&e.notify));
                 if let Some(n) = notify {
                     // notify_one 存储一个 permit，即使当前无等待方也不丢失
                     n.notify_one();
                 }
             }
         }
+    }
+
+    // 后台线程退出前清理所有 ReadCondition
+    for entry in readers.values() {
+        unsafe { zenrc_dds::dds_delete(entry.readcond) };
     }
 }
