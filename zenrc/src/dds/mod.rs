@@ -5,5 +5,6 @@ pub mod subscriber;
 pub mod topic;
 pub mod waitset;
 pub mod context;
+pub mod service;
 #[cfg(feature = "async")]
 pub mod async_stream;

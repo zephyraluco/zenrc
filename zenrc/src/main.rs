@@ -1,51 +1,73 @@
 mod dds;
 
 use std::time::Duration;
+
 use dds::context::DdsContext;
 use dds::qos::Qos;
-use futures::StreamExt;
 use zenrc_dds::std_msgs;
 
-#[tokio::main]
-async fn main() {
-    // DdsContext 同时创建域参与者和后台 WaitSet 轮询线程
+fn main() {
     let ctx = DdsContext::new(0).expect("创建 DDS 上下文失败");
 
-    let publisher = ctx
-        .create_publisher::<std_msgs::msg::String>("rt/test_string", Qos::sensor_data())
-        .expect("创建发布者失败");
-    let subscriber = ctx
-        .create_subscription::<std_msgs::msg::String>("rt/test_string", Qos::sensor_data())
-        .expect("创建订阅者失败");
+    // 工厂方法内部使用 ROS2 命名约定：
+    //   请求主题： rq/echo_serviceRequest
+    //   应答主题： rr/echo_serviceReply
+    // 程序运行时 ros2 service list 可见 /echo_service
+    let server = ctx
+        .create_service_server::<std_msgs::msg::String, std_msgs::msg::String>(
+            "echo_service",
+            Qos::services_default(),
+        )
+        .expect("创建服务端失败");
 
-    println!("Publisher/Dispatcher 已就绪，主题: 'rt/test_string'");
+    let client = ctx
+        .create_service_client::<std_msgs::msg::String, std_msgs::msg::String>(
+            "echo_service",
+            Qos::services_default(),
+        )
+        .expect("创建客户端失败");
 
-    // ── 订阅任务：将订阅者转为异步流，由调度器后台线程驱动 ─────────────────────
-    tokio::spawn(async move {
-        let mut stream = subscriber.into_stream(32).unwrap();
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(sample) => println!("收到: {:?}", sample.data),
+    println!("Service/Client 已就绪，服务名: 'echo_service'");
+
+    let server_thread = std::thread::spawn(move || {
+        let mut handled = 0u32;
+        loop {
+            match server.spin_once(|req: std_msgs::msg::String| {
+                println!("[服务端] 收到请求: \"{}\"", req.data);
+                std_msgs::msg::String {
+                    data: req.data.to_uppercase(),
+                }
+            }) {
+                Ok(true) => handled += 1,
+                Ok(false) => std::thread::sleep(Duration::from_millis(1)),
                 Err(e) => {
-                    eprintln!("流错误: {e:?}");
+                    eprintln!("[服务端] 错误: {e}");
                     break;
                 }
             }
         }
+        println!("[服务端] 已处理 {handled} 个请求，退出");
     });
 
-    // ── 发布循环 ─────────────────────────────────────────────────────────────
-    let mut seq: u64 = 0;
+    // 等待 DDS 发现
+    std::thread::sleep(Duration::from_millis(500));
+
+    let mut i = 0u32;
     loop {
-        let msg = std_msgs::msg::String {
-            data: format!("hello #{seq}"),
+        let req = std_msgs::msg::String {
+            data: format!("hello #{i}"),
         };
-        if let Err(e) = publisher.publish(msg) {
-            eprintln!("发布错误: {e:?}");
-            break;
+        println!("[客户端] 发送请求: \"{}\"", req.data);
+        match client.call(req, Duration::from_secs(5)) {
+            Ok(Some(reply)) => println!("[客户端] 收到应答: \"{}\"", reply.data),
+            Ok(None) => println!("[客户端] 请求 #{i} 超时"),
+            Err(e) => eprintln!("[客户端] 调用错误: {e}"),
         }
-        seq += 1;
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        std::thread::sleep(Duration::from_millis(50));
+        i += 1;
     }
+
+    server_thread.join().expect("服务端线程异常退出");
+    println!("通信完成");
 }
 
