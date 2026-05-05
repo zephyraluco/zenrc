@@ -1,4 +1,6 @@
 use std::ffi::c_void;
+#[cfg(feature = "async")]
+use std::sync::Arc;
 use std::time::Duration;
 
 use zenrc_dds::{DDS_ANY_STATE, RawMessageBridge, dds_entity_t, dds_sample_info_t};
@@ -9,19 +11,23 @@ use super::topic::Topic;
 
 // ─── ServiceServer ─────────────────────────────────────────────────────────────
 
-/// DDS 服务端，监听请求主题并发布应答。
+/// DDS 服务端，监听请求主题并处理请求、发布应答。
 ///
-/// 请求主题：`{name}/request`，应答主题：`{name}/reply`。
+/// 请求主题：`rq/{name}Request`，应答主题：`rr/{name}Reply`。
 ///
-/// 通过 [`super::context::DomainParticipant::create_service_server`] 创建。
+/// 通过 [`super::context::DdsContext::create_service`] 创建。
+/// 调用 [`ServiceServer::next`] 驱动请求处理。
 pub struct ServiceServer<Req: RawMessageBridge, Res: RawMessageBridge> {
     reader: dds_entity_t,
     writer: dds_entity_t,
     _req_topic: Topic<Req>,
     _res_topic: Topic<Res>,
+    #[cfg(feature = "async")]
+    notify: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl<Req: RawMessageBridge, Res: RawMessageBridge> ServiceServer<Req, Res> {
+    /// 创建服务端（不附加到任何 DdsContext）。
     pub(crate) fn new(
         reader: dds_entity_t,
         writer: dds_entity_t,
@@ -33,29 +39,65 @@ impl<Req: RawMessageBridge, Res: RawMessageBridge> ServiceServer<Req, Res> {
             writer,
             _req_topic: req_topic,
             _res_topic: res_topic,
+            #[cfg(feature = "async")]
+            notify: None,
         }
     }
 
-    /// 尝试读取并处理一个请求，若无请求则立即返回 `Ok(false)`
-    pub fn spin_once<F>(&self, handler: F) -> Result<bool>
+    /// 创建服务端并将 reader 注册到 [`super::context::DdsContext`] 的共享 WaitSet，
+    /// 设置异步 notify 句柄。
+    ///
+    /// 由 [`super::context::DdsContext::create_service`] 调用。
+    pub(crate) fn with_context(
+        reader: dds_entity_t,
+        writer: dds_entity_t,
+        req_topic: Topic<Req>,
+        res_topic: Topic<Res>,
+        context: &super::context::DdsContext,
+    ) -> Self {
+        #[cfg(feature = "async")]
+        let notify = Some(context.attach(reader));
+        #[cfg(not(feature = "async"))]
+        let _ = context;
+        Self {
+            reader,
+            writer,
+            _req_topic: req_topic,
+            _res_topic: res_topic,
+            #[cfg(feature = "async")]
+            notify,
+        }
+    }
+
+    /// 等待下一条请求并调用 `handler` 处理。
+    ///
+    /// 通过 [`super::context::DdsContext`] 的共享 WaitSet 触发的 [`tokio::sync::Notify`] 等待，
+    /// 收到通知后立即调用 `dds_take` 取出请求，无需创建独立 WaitSet。
+    ///
+    /// - 返回 `Ok(true)`：成功处理一条请求。
+    /// - 返回 `Ok(false)`：收到通知但数据无效（已被其他路径消费）。
+    /// - 返回 `Err`：`notify` 未设置（未通过 `with_context` 创建）或 DDS 操作失败。
+    #[cfg(feature = "async")]
+    pub async fn next<F>(&self, handler: F) -> Result<bool>
     where
         F: FnOnce(Req) -> Res,
     {
+        let notify = match &self.notify {
+            Some(n) => n,
+            None => {
+                return Err(DdsError::NullPtr(
+                    "ServiceServer 未附加到 DdsContext，无法使用 next".into(),
+                ));
+            }
+        };
+        notify.notified().await;
         let mut raw: Req::CStruct = unsafe { std::mem::zeroed() };
         let mut ptr: *mut c_void = &mut raw as *mut Req::CStruct as *mut c_void;
         let mut info: dds_sample_info_t = unsafe { std::mem::zeroed() };
-
-        let n = unsafe {
-            zenrc_dds::dds_take(self.reader, &mut ptr, &mut info, 1, 1)
-        };
-
-        if n < 0 {
-            return Err(DdsError::RetCode(n, "dds_take failed".into()));
-        }
-        if n == 0 || !info.valid_data {
+        let taken = unsafe { zenrc_dds::dds_take(self.reader, &mut ptr, &mut info, 1, 1) };
+        if taken <= 0 || !info.valid_data {
             return Ok(false);
         }
-
         let req = Req::from_raw(raw);
         let res = handler(req);
         let raw_res = res.to_raw();
@@ -65,43 +107,6 @@ impl<Req: RawMessageBridge, Res: RawMessageBridge> ServiceServer<Req, Res> {
         Ok(true)
     }
 
-    /// 持续处理请求，直到 `handler` 返回 `None`
-    pub fn spin<F>(&self, mut handler: F) -> Result<()>
-    where
-        F: FnMut(Req) -> Option<Res>,
-    {
-        loop {
-            let mut raw: Req::CStruct = unsafe { std::mem::zeroed() };
-            let mut ptr: *mut c_void = &mut raw as *mut Req::CStruct as *mut c_void;
-            let mut info: dds_sample_info_t = unsafe { std::mem::zeroed() };
-
-            let n = unsafe {
-                zenrc_dds::dds_take(self.reader, &mut ptr, &mut info, 1, 1)
-            };
-
-            if n < 0 {
-                return Err(DdsError::RetCode(n, "dds_take failed".into()));
-            }
-            if n > 0 && info.valid_data {
-                let req = Req::from_raw(raw);
-                match handler(req) {
-                    Some(res) => {
-                        let raw_res = res.to_raw();
-                        check_ret(unsafe {
-                            zenrc_dds::dds_write(
-                                self.writer,
-                                &raw_res as *const _ as *const c_void,
-                            )
-                        })?;
-                    }
-                    None => break,
-                }
-            } else {
-                std::thread::sleep(Duration::from_millis(1));
-            }
-        }
-        Ok(())
-    }
 }
 
 impl<Req: RawMessageBridge, Res: RawMessageBridge> Drop for ServiceServer<Req, Res> {
@@ -119,7 +124,7 @@ unsafe impl<Req: RawMessageBridge, Res: RawMessageBridge> Sync for ServiceServer
 
 /// DDS 服务客户端，发送请求并阻塞等待应答。
 ///
-/// 通过 [`super::context::DomainParticipant::create_service_client`] 创建。
+/// 通过 [`super::context::DomainParticipant::create_client`] 创建。
 pub struct ServiceClient<Req: RawMessageBridge, Res: RawMessageBridge> {
     writer: dds_entity_t,
     reader: dds_entity_t,

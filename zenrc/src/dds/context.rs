@@ -142,78 +142,6 @@ impl DomainParticipant {
         Ok(buf)
     }
 
-    /// 创建服务端（ServiceServer）
-    ///
-    /// 遵循 ROS2 DDS 主题命名约定：
-    /// 请求主题：`rq/<service_name>Request`，应答主题：`rr/<service_name>Reply`。
-    /// 这使得 `ros2 service list` 能够发现该服务。
-    pub fn create_service_server<Req: RawMessageBridge, Res: RawMessageBridge>(
-        &self,
-        service_name: &str,
-        qos: Qos,
-    ) -> Result<super::service::ServiceServer<Req, Res>> {
-        let bare = service_name.trim_start_matches('/');
-        let req_name = format!("rq/{}Request", bare);
-        let res_name = format!("rr/{}Reply", bare);
-        let req_topic = self.create_topic_with_qos::<Req>(&req_name, &qos)?;
-        let res_topic = self.create_topic_with_qos::<Res>(&res_name, &qos)?;
-        let reader = check_entity(unsafe {
-            zenrc_dds::dds_create_reader(
-                self.entity,
-                req_topic.entity,
-                qos.raw as *const _,
-                std::ptr::null(),
-            )
-        })?;
-        let writer = check_entity(unsafe {
-            zenrc_dds::dds_create_writer(
-                self.entity,
-                res_topic.entity,
-                qos.raw as *const _,
-                std::ptr::null(),
-            )
-        })?;
-        Ok(super::service::ServiceServer::new(reader, writer, req_topic, res_topic))
-    }
-
-    /// 创建服务客户端（ServiceClient）
-    ///
-    /// 遵循 ROS2 DDS 主题命名约定：
-    /// 请求主题：`rq/<service_name>Request`，应答主题：`rr/<service_name>Reply`。
-    pub fn create_service_client<Req: RawMessageBridge, Res: RawMessageBridge>(
-        &self,
-        service_name: &str,
-        qos: Qos,
-    ) -> Result<super::service::ServiceClient<Req, Res>> {
-        let bare = service_name.trim_start_matches('/');
-        let req_name = format!("rq/{}Request", bare);
-        let res_name = format!("rr/{}Reply", bare);
-        let req_topic = self.create_topic_with_qos::<Req>(&req_name, &qos)?;
-        let res_topic = self.create_topic_with_qos::<Res>(&res_name, &qos)?;
-        let writer = check_entity(unsafe {
-            zenrc_dds::dds_create_writer(
-                self.entity,
-                req_topic.entity,
-                qos.raw as *const _,
-                std::ptr::null(),
-            )
-        })?;
-        let reader = check_entity(unsafe {
-            zenrc_dds::dds_create_reader(
-                self.entity,
-                res_topic.entity,
-                qos.raw as *const _,
-                std::ptr::null(),
-            )
-        })?;
-        Ok(super::service::ServiceClient::new(
-            writer,
-            reader,
-            self.entity,
-            req_topic,
-            res_topic,
-        ))
-    }
 }
 
 // ─── 内部常量 ──────────────────────────────────────────────────────────────────
@@ -424,22 +352,86 @@ impl DdsContext {
         Ok(Subscription::with_context(reader, topic, self))
     }
 
-    /// 创建服务端（ServiceServer），委托给域参与者
-    pub fn create_service_server<Req: RawMessageBridge, Res: RawMessageBridge>(
+    /// 创建服务端（ServiceServer）
+    ///
+    /// 遵循 ROS2 DDS 主题命名约定：
+    /// 请求主题：`rq/<service_name>Request`，应答主题：`rr/<service_name>Reply`。
+    /// 这使得 `ros2 service list` 能够发现该服务。
+    ///
+    /// reader 自动注册到本上下文的共享 WaitSet，用户在自己的循环中调用
+    /// [`ServiceServer::next`] 驱动请求处理。
+    pub fn create_service<Req, Res>(
         &self,
         service_name: &str,
         qos: Qos,
-    ) -> Result<super::service::ServiceServer<Req, Res>> {
-        self.participant.create_service_server(service_name, qos)
+    ) -> Result<super::service::ServiceServer<Req, Res>>
+    where
+        Req: RawMessageBridge,
+        Res: RawMessageBridge,
+    {
+        let participant_entity = self.participant.entity;
+        let bare = service_name.trim_start_matches('/');
+        let req_name = format!("rq/{}Request", bare);
+        let res_name = format!("rr/{}Reply", bare);
+        let req_topic = self.create_topic_with_qos::<Req>(&req_name, &qos)?;
+        let res_topic = self.create_topic_with_qos::<Res>(&res_name, &qos)?;
+        let reader = check_entity(unsafe {
+            zenrc_dds::dds_create_reader(
+                participant_entity,
+                req_topic.entity,
+                qos.raw as *const _,
+                std::ptr::null(),
+            )
+        })?;
+        let writer = check_entity(unsafe {
+            zenrc_dds::dds_create_writer(
+                participant_entity,
+                res_topic.entity,
+                qos.raw as *const _,
+                std::ptr::null(),
+            )
+        })?;
+        Ok(super::service::ServiceServer::with_context(reader, writer, req_topic, res_topic, self))
     }
 
-    /// 创建服务客户端（ServiceClient），委托给域参与者
-    pub fn create_service_client<Req: RawMessageBridge, Res: RawMessageBridge>(
+    /// 创建服务客户端（ServiceClient）
+    ///
+    /// 遵循 ROS2 DDS 主题命名约定：
+    /// 请求主题：`rq/<service_name>Request`，应答主题：`rr/<service_name>Reply`。
+    pub fn create_client<Req: RawMessageBridge, Res: RawMessageBridge>(
         &self,
         service_name: &str,
         qos: Qos,
     ) -> Result<super::service::ServiceClient<Req, Res>> {
-        self.participant.create_service_client(service_name, qos)
+        let participant_entity = self.participant.entity();
+        let bare = service_name.trim_start_matches('/');
+        let req_name = format!("rq/{}Request", bare);
+        let res_name = format!("rr/{}Reply", bare);
+        let req_topic = self.create_topic_with_qos::<Req>(&req_name, &qos)?;
+        let res_topic = self.create_topic_with_qos::<Res>(&res_name, &qos)?;
+        let writer = check_entity(unsafe {
+            zenrc_dds::dds_create_writer(
+                participant_entity,
+                req_topic.entity,
+                qos.raw as *const _,
+                std::ptr::null(),
+            )
+        })?;
+        let reader = check_entity(unsafe {
+            zenrc_dds::dds_create_reader(
+                participant_entity,
+                res_topic.entity,
+                qos.raw as *const _,
+                std::ptr::null(),
+            )
+        })?;
+        Ok(super::service::ServiceClient::new(
+            writer,
+            reader,
+            participant_entity,
+            req_topic,
+            res_topic,
+        ))
     }
 
     /// 将 reader 加入待处理队列，由后台线程在下一轮循环创建 ReadCondition 并附加到 WaitSet。
