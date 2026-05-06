@@ -12,3 +12,10 @@ zenrc-dds = { path = "../zenrc-dds" }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion = "0.8"
+
+[[bench]]
+name = "dds_bench"
+harness = false

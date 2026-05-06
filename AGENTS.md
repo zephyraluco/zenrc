@@ -41,6 +41,13 @@
   - cargo run --example shmpub -p zenrc-shm
   - cargo run --example shmsub -p zenrc-shm
   - cargo run -p zenrc
+- Benchmark:
+  - 仅编译不运行: `cargo bench -p zenrc --no-run`
+  - 运行全部 benchmark: `cargo bench -p zenrc`
+  - 运行指定 benchmark: `cargo bench -p zenrc -- <benchmark_name>`
+  - benchmark 文件位置: [zenrc/benches/dds_bench.rs](zenrc/benches/dds_bench.rs)
+  - 依赖: `criterion = "0.5"`（在 `zenrc/Cargo.toml` 的 `[dev-dependencies]` 中，并声明 `[[bench]] name = "dds_bench" harness = false`）
+  - 注意: benchmark 运行需要有效的 CycloneDDS 环境（同编译要求）
 
 ## 组件边界
 
