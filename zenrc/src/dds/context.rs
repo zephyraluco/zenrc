@@ -6,6 +6,8 @@ use std::thread;
 
 use zenrc_dds::{dds_attach_t, dds_domainid_t, dds_entity_t, RawMessageBridge, DDS_ANY_STATE};
 
+use crate::dds::service;
+
 use super::error::{check_entity, check_ret, DdsError, Result};
 use super::publisher::Publisher;
 use super::qos::Qos;
@@ -323,7 +325,7 @@ impl DdsContext {
 
     /// 创建订阅者（自动创建 Topic），并将 ReadCondition 附加到本上下文的 WaitSet。
     ///
-    /// 通过此方法创建的 `Subscription` 支持异步流（[`Subscription::into_stream`]）。
+    /// 通过此方法创建的 `Subscription` 支持 `set_event` 事件回调。
     /// 若只需同步访问，可直接使用 `ctx.participant.create_subscription()`。
     ///
     /// # 泛型参数
@@ -349,7 +351,9 @@ impl DdsContext {
                 std::ptr::null(),
             )
         })?;
-        Ok(Subscription::with_context(reader, topic, self))
+        let mut subscription = Subscription::new(reader, topic);
+        subscription.with_context(self);
+        Ok(subscription)
     }
 
     /// 创建服务端（ServiceServer）
@@ -391,7 +395,9 @@ impl DdsContext {
                 std::ptr::null(),
             )
         })?;
-        Ok(super::service::ServiceServer::with_context(reader, writer, req_topic, res_topic, self))
+        let mut service = service::ServiceServer::new(reader, writer, req_topic, res_topic);
+        service.with_context(self);
+        Ok(service)
     }
 
     /// 创建服务客户端（ServiceClient）

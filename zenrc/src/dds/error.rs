@@ -7,6 +7,10 @@ pub enum DdsError {
     #[error("DDS 错误码 {0}: {1}")]
     RetCode(i32, String),
 
+    /// DDS 等待超时
+    #[error("DDS 等待超时: {0}")]
+    Timeout(String),
+
     /// 字符串包含内部 NUL 字节
     #[error("字符串包含 NUL 字节: {0}")]
     NullStr(#[from] std::ffi::NulError),

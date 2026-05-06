@@ -1,95 +1,15 @@
 use std::ffi::c_void;
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use std::time::Duration;
 
 use zenrc_dds::{
-    DDS_ANY_STATE, RawMessageBridge, dds_entity_t, dds_instance_handle_t, dds_sample_info_t,
-    dds_time_t,
+    DDS_ANY_STATE, RawMessageBridge, Sample, SampleInfo, dds_entity_t, dds_instance_handle_t,
+    dds_sample_info_t,
 };
 
 use super::error::{DdsError, Result, check_entity, check_ret};
 use super::topic::Topic;
-
-// ─── SampleInfo ────────────────────────────────────────────────────────────────
-
-/// 样本元信息，对应 `dds_sample_info_t`
-#[derive(Debug, Clone)]
-pub struct SampleInfo {
-    /// 是否已被读取过（`DDS_SST_READ`）
-    pub was_read: bool,
-    /// 是否为首次看到该实例（`DDS_VST_NEW`）
-    pub is_new_view: bool,
-    /// 实例是否存活
-    pub is_alive: bool,
-    /// 样本数据是否有效（false 表示纯状态变化通知）
-    pub valid_data: bool,
-    /// 源端时间戳（纳秒）
-    pub source_timestamp: dds_time_t,
-    /// 实例句柄
-    pub instance_handle: dds_instance_handle_t,
-    /// 发布者句柄
-    pub publication_handle: dds_instance_handle_t,
-}
-
-impl From<dds_sample_info_t> for SampleInfo {
-    fn from(raw: dds_sample_info_t) -> Self {
-        Self {
-            was_read: raw.sample_state == zenrc_dds::dds_sample_state_DDS_SST_READ,
-            is_new_view: raw.view_state == zenrc_dds::dds_view_state_DDS_VST_NEW,
-            is_alive: raw.instance_state == zenrc_dds::dds_instance_state_DDS_IST_ALIVE,
-            valid_data: raw.valid_data,
-            source_timestamp: raw.source_timestamp,
-            instance_handle: raw.instance_handle,
-            publication_handle: raw.publication_handle,
-        }
-    }
-}
-
-// ─── Sample<T> ─────────────────────────────────────────────────────────────────
-
-/// 对从 DDS 取回的样本的 RAII 包装。
-///
-/// T 是安全的 Rust 类型（实现 RawMessageBridge）。
-/// Drop 时自动调用 T::free_contents()，释放内存。
-pub struct Sample<T: RawMessageBridge> {
-    inner: T,
-    info: SampleInfo,
-}
-
-impl<T: RawMessageBridge> Sample<T> {
-    /// 获取样本元信息
-    pub fn info(&self) -> &SampleInfo {
-        &self.info
-    }
-
-    /// 消费 Sample，返回消息和元信息
-    pub fn into_parts(self) -> (T, SampleInfo) {
-        let info = self.info.clone();
-        let inner = unsafe { std::ptr::read(&self.inner as *const T) };
-        std::mem::forget(self);
-        (inner, info)
-    }
-}
-
-impl<T: RawMessageBridge> Deref for Sample<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.inner
-    }
-}
-
-impl<T: RawMessageBridge> DerefMut for Sample<T> {
-    fn deref_mut(&mut self) -> &mut T {
-        &mut self.inner
-    }
-}
-
-impl<T: RawMessageBridge> Drop for Sample<T> {
-    fn drop(&mut self) {
-        self.inner.free_contents();
-    }
-}
 
 // ─── Subscription<T> ───────────────────────────────────────────────────────────
 
@@ -117,23 +37,16 @@ impl<T: RawMessageBridge> Subscription<T> {
         }
     }
 
-    /// 创建订阅者并附加到指定 DdsContext 的 WaitSet，支持异步流。
+    /// 创建订阅者并附加到指定 DdsContext 的 WaitSet，支持事件回调。
     ///
     /// 由 [`DdsContext::create_subscription`](super::context::DdsContext::create_subscription) 调用。
     pub(crate) fn with_context(
-        reader: dds_entity_t,
-        topic: Topic<T>,
+        &mut self,
         context: &super::context::DdsContext,
-    ) -> Self {
+    ) {
         #[cfg(feature = "async")]
-        let notify = Some(context.attach(reader));
-        Self {
-            reader,
-            topic,
-            _marker: PhantomData,
-            #[cfg(feature = "async")]
-            notify,
-        }
+        let notify = Some(context.attach(self.reader));
+        self.notify = notify;
     }
 
     // ── Take：取出并从缓存中移除 ───────────────────────────────────────────────
@@ -249,6 +162,38 @@ impl<T: RawMessageBridge> Subscription<T> {
         self.topic.entity
     }
 
+    /// 在给定超时时间内等待下一条样本并返回。
+    pub async fn next(&self, timeout: Duration) -> Result<Sample<T>> {
+        let notify = match self.notify.clone() {
+            Some(n) => n,
+            None => {
+                return Err(DdsError::NullPtr(
+                    "订阅未附加到任何 DdsContext，无法等待下一条样本".into(),
+                ));
+            }
+        };
+
+        // 先快路径尝试一次，避免错过已到达但尚未消费的数据。
+        if let Some(sample) = self.take_one()? {
+            return Ok(sample);
+        }
+
+        let wait_fut = async {
+            loop {
+                notify.notified().await;
+
+                if let Some(sample) = self.take_one()? {
+                    return Ok(sample);
+                }
+            }
+        };
+
+        match tokio::time::timeout(timeout, wait_fut).await {
+            Ok(res) => res,
+            Err(_) => Err(DdsError::Timeout("等待订阅样本超时".into())),
+        }
+    }
+
     // ── 内部实现 ──────────────────────────────────────────────────────────────
 
     fn read_or_take(&self, max: usize, mask: u32, take: bool) -> Result<Vec<Sample<T>>> {
@@ -320,52 +265,48 @@ impl<T: RawMessageBridge> Subscription<T> {
 
 #[cfg(feature = "async")]
 impl<T: RawMessageBridge + Send + 'static> Subscription<T> {
-    /// 将订阅转换为异步流，每次有新样本时产出 `Result<Sample<T>>`。
-    ///
-    /// 调用后 `Subscription` 所有权转移至后台 tokio 任务，流被 drop 时后台任务自动退出。
-    /// 由共享 WaitSet（[`DdsContext::init`](super::context::DdsContext::init) 初始化）
-    /// 的 `Notify` 驱动，后台无额外轮询线程开销。
-    ///
-    /// # Panics
-    /// 若调用前未执行 `DdsContext::init`，则流会立即结束（`notify` 为 `None`）。
-    pub fn into_stream(self, size: usize) -> Result<super::async_stream::SubscriptionStream<T>> {
-        use tokio::sync::mpsc;
-        let (tx, rx) = mpsc::channel::<Result<Sample<T>>>(size);
-
+    /// 注册事件回调：当共享 WaitSet 的 notify 被唤醒时，在 tokio 任务中处理所有新样本。
+    pub fn set_event<F>(&self, handler: F) -> Result<tokio::task::JoinHandle<()>>
+    where
+        F: Fn(Sample<T>) + Send + Sync + 'static,
+    {
         let notify = match self.notify.clone() {
             Some(n) => n,
             None => {
-                // 没有 Notify 驱动，无法异步等待，立即返回 None
                 return Err(DdsError::NullPtr(
-                    "订阅未附加到任何 DdsContext，无法创建异步流".into(),
+                    "订阅未附加到任何 DdsContext，无法设置事件回调".into(),
                 ));
             }
         };
 
-        let task = tokio::task::spawn(async move {
+        let reader = self.reader;
+        let handler = Arc::new(handler);
+
+        Ok(tokio::task::spawn(async move {
             loop {
-                if tx.is_closed() {
-                    break;
-                }
-                // 等待共享 WaitSet 触发通知
                 notify.notified().await;
-                match self.take(size) {
-                    Ok(samples) => {
-                        for sample in samples {
-                            if tx.send(Ok(sample)).await.is_err() {
-                                return;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Err(e)).await;
+
+                loop {
+                    let mut raw: T::CStruct = unsafe { std::mem::zeroed() };
+                    let mut ptr: *mut c_void = &mut raw as *mut T::CStruct as *mut c_void;
+                    let mut info: dds_sample_info_t = unsafe { std::mem::zeroed() };
+
+                    let taken = unsafe { zenrc_dds::dds_take(reader, &mut ptr, &mut info, 1, 1) };
+                    if taken <= 0 {
                         break;
+                    }
+
+                    if info.valid_data {
+                        (handler)(Sample {
+                            inner: T::from_raw(raw),
+                            info: SampleInfo::from(info),
+                        });
+                    } else {
+                        let _ = T::from_raw(raw);
                     }
                 }
             }
-        });
-
-        Ok(super::async_stream::SubscriptionStream::new(rx, task))
+        }))
     }
 }
 

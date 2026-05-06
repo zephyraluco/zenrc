@@ -3,7 +3,9 @@ use std::ffi::c_void;
 use std::sync::Arc;
 use std::time::Duration;
 
-use zenrc_dds::{DDS_ANY_STATE, RawMessageBridge, dds_entity_t, dds_sample_info_t};
+use zenrc_dds::{
+    DDS_ANY_STATE, RawMessageBridge, Sample, SampleInfo, dds_entity_t, dds_sample_info_t,
+};
 
 use super::error::{DdsError, Result, check_entity, check_ret};
 use super::qos::duration_to_nanos;
@@ -49,62 +51,111 @@ impl<Req: RawMessageBridge, Res: RawMessageBridge> ServiceServer<Req, Res> {
     ///
     /// 由 [`super::context::DdsContext::create_service`] 调用。
     pub(crate) fn with_context(
-        reader: dds_entity_t,
-        writer: dds_entity_t,
-        req_topic: Topic<Req>,
-        res_topic: Topic<Res>,
+        &mut self,
         context: &super::context::DdsContext,
-    ) -> Self {
+    ) {
         #[cfg(feature = "async")]
-        let notify = Some(context.attach(reader));
+        let notify = Some(context.attach(self.reader));
         #[cfg(not(feature = "async"))]
         let _ = context;
-        Self {
-            reader,
-            writer,
-            _req_topic: req_topic,
-            _res_topic: res_topic,
-            #[cfg(feature = "async")]
-            notify,
-        }
+        self.notify = notify;
     }
 
-    /// 等待下一条请求并调用 `handler` 处理。
-    ///
-    /// 通过 [`super::context::DdsContext`] 的共享 WaitSet 触发的 [`tokio::sync::Notify`] 等待，
-    /// 收到通知后立即调用 `dds_take` 取出请求，无需创建独立 WaitSet。
-    ///
-    /// - 返回 `Ok(true)`：成功处理一条请求。
-    /// - 返回 `Ok(false)`：收到通知但数据无效（已被其他路径消费）。
-    /// - 返回 `Err`：`notify` 未设置（未通过 `with_context` 创建）或 DDS 操作失败。
-    #[cfg(feature = "async")]
-    pub async fn next<F>(&self, handler: F) -> Result<bool>
-    where
-        F: FnOnce(Req) -> Res,
-    {
-        let notify = match &self.notify {
-            Some(n) => n,
-            None => {
-                return Err(DdsError::NullPtr(
-                    "ServiceServer 未附加到 DdsContext，无法使用 next".into(),
-                ));
-            }
-        };
-        notify.notified().await;
+    fn take_one_request(reader: dds_entity_t) -> Result<Option<Sample<Req>>> {
         let mut raw: Req::CStruct = unsafe { std::mem::zeroed() };
         let mut ptr: *mut c_void = &mut raw as *mut Req::CStruct as *mut c_void;
         let mut info: dds_sample_info_t = unsafe { std::mem::zeroed() };
-        let taken = unsafe { zenrc_dds::dds_take(self.reader, &mut ptr, &mut info, 1, 1) };
-        if taken <= 0 || !info.valid_data {
-            return Ok(false);
+        let taken = unsafe { zenrc_dds::dds_take(reader, &mut ptr, &mut info, 1, 1) };
+        if taken < 0 {
+            return Err(DdsError::RetCode(taken, "dds_take failed".into()));
         }
-        let req = Req::from_raw(raw);
-        let res = handler(req);
-        let raw_res = res.to_raw();
-        check_ret(unsafe {
-            zenrc_dds::dds_write(self.writer, &raw_res as *const _ as *const c_void)
-        })?;
-        Ok(true)
+        if taken == 0 || !info.valid_data {
+            if taken > 0 {
+                let _ = Req::from_raw(raw);
+            }
+            return Ok(None);
+        }
+
+        Ok(Some(Sample {
+            inner: Req::from_raw(raw),
+            info: SampleInfo::from(info),
+        }))
+    }
+
+    /// 在给定超时时间内异步等待下一条请求并返回该样本。
+    #[cfg(feature = "async")]
+    pub async fn next(&self, timeout: Duration) -> Result<Sample<Req>> {
+        let notify = match self.notify.clone() {
+            Some(n) => n,
+            None => {
+                return Err(DdsError::NullPtr(
+                    "ServiceServer 未附加到 DdsContext，无法等待下一条请求".into(),
+                ));
+            }
+        };
+
+        if let Some(sample) = Self::take_one_request(self.reader)? {
+            return Ok(sample);
+        }
+
+        let wait_fut = async {
+            loop {
+                notify.notified().await;
+                if let Some(sample) = Self::take_one_request(self.reader)? {
+                    return Ok(sample);
+                }
+            }
+        };
+
+        match tokio::time::timeout(timeout, wait_fut).await {
+            Ok(res) => res,
+            Err(_) => Err(DdsError::Timeout("等待服务请求超时".into())),
+        }
+    }
+
+    /// 注册事件回调：当共享 WaitSet 的 notify 被唤醒时，在 tokio 任务中执行 `handler`。
+    ///
+    /// 该函数会启动后台任务并返回任务句柄。任务生命周期由调用方管理。
+    #[cfg(feature = "async")]
+    pub fn set_event<F>(&self, handler: F) -> Result<tokio::task::JoinHandle<()>>
+    where
+        F: Fn(Sample<Req>) -> Res + Send + Sync + 'static,
+        Req: Send + 'static,
+        Res: Send + 'static,
+    {
+        let notify = match &self.notify {
+            Some(n) => Arc::clone(n),
+            None => {
+                return Err(DdsError::NullPtr(
+                    "ServiceServer 未附加到 DdsContext，无法设置事件回调".into(),
+                ));
+            }
+        };
+
+        let reader = self.reader;
+        let writer = self.writer;
+        let handler = Arc::new(handler);
+
+        Ok(tokio::spawn(async move {
+            loop {
+                notify.notified().await;
+
+                let sample = match Self::take_one_request(reader) {
+                    Ok(Some(sample)) => sample,
+                    Ok(None) => continue,
+                    Err(_) => continue,
+                };
+                let res = (handler)(sample);
+                let raw_res = res.to_raw();
+                if check_ret(unsafe {
+                    zenrc_dds::dds_write(writer, &raw_res as *const _ as *const c_void)
+                })
+                .is_err()
+                {
+                    break;
+                }
+            }
+        }))
     }
 
 }

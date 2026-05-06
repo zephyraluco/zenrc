@@ -23,25 +23,14 @@ async fn main() {
         )
         .expect("创建服务端失败");
 
-    let _server_task = tokio::spawn(async move {
-        loop {
-            match server
-                .next(|req: std_msgs::msg::String| {
-                    println!("[服务端] 收到请求: \"{}\"", req.data);
-                    std_msgs::msg::String {
-                        data: req.data.to_uppercase(),
-                    }
-                })
-                .await
-            {
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("[服务端] 错误: {e}");
-                    break;
-                }
+    let _server_task = server
+        .set_event(|sample| {
+            println!("[服务端] 收到请求: \"{}\"", sample.data);
+            std_msgs::msg::String {
+                data: sample.data.to_uppercase(),
             }
-        }
-    });
+        })
+        .expect("注册服务事件回调失败");
 
     let client = ctx
         .create_client::<std_msgs::msg::String, std_msgs::msg::String>(

@@ -1,86 +1,94 @@
-# zenrc Agent Instructions
+# AGENTS.md
 
-zenrc 是一个面向机器人控制系统的 Rust 工具集，采用 Cargo workspace 组织。
-代码注释和文档统一使用**简体中文**。
+面向本仓库内 AI 编码代理的最小工作说明。目标是让代理在不猜测的前提下快速构建、验证和定位模块。
 
-## 构建与测试
+## 工作区事实来源
 
-```bash
-# 构建所有模块
-cargo build --workspace
+- 工作区成员以 [Cargo.toml](Cargo.toml) 的 workspace.members 为准。
+- 目前成员 crate:
+  - zenrc
+  - zenrc-dds
+  - zenrc-shm
+  - zenrc-log
+  - zenrc-bt
+  - zenrc-macros
+- [README.md](README.md) 含历史信息（例如提到 zenrc-rcl）。当 README 与实际代码不一致时，以当前工作区文件为准。
 
-# 运行测试
-cargo test --workspace
+## 环境与先决条件
 
-# 运行示例
-cargo run --example printonde -p zenrc-bt
-cargo run --example span -p zenrc-log
-cargo run --example shmpub -p zenrc-shm   # 需配套 shmsub
-```
+- Rust edition 使用 2024（所有 crate 的 Cargo.toml）。
+- 编译 zenrc-dds 需要 CycloneDDS 开发环境:
+  - 可被 pkg-config 发现的 CycloneDDS
+  - 可执行文件 idlc 可用（PATH 中，或可由 CycloneDDS 安装目录推导）
+- 生成 ROS2 消息绑定常见环境变量（由 [zenrc-dds/build.rs](zenrc-dds/build.rs) 监控）:
+  - AMENT_PREFIX_PATH
+  - CMAKE_PREFIX_PATH
+  - CMAKE_IDL_PACKAGES
+  - IDL_PACKAGE_FILTER
+  - ROS_DISTRO
+  - DDS_IDL_PATH
 
-> **注意**：`zenrc-dds` 构建需要系统安装 CycloneDDS（通过 `pkg-config` 探测）。
-> 若未安装，构建会失败。其他模块（bt、shm、log、macros）无此依赖，可单独构建：
-> `cargo build -p zenrc-bt`
+## 常用命令
 
-## 工作区结构
+- 全量构建: cargo build --workspace
+- 全量测试: cargo test --workspace
+- 指定 crate 构建: cargo build -p <crate>
+- 示例运行:
+  - cargo run --example printonde -p zenrc-bt
+  - cargo run --example span -p zenrc-log
+  - cargo run --example reader -p zenrc-shm
+  - cargo run --example writer -p zenrc-shm
+  - cargo run --example shmpub -p zenrc-shm
+  - cargo run --example shmsub -p zenrc-shm
+  - cargo run -p zenrc
 
-| Crate | 职责 |
-|---|---|
-| `zenrc` | 主应用；DDS pub/sub 的安全封装（`zenrc/src/dds/`） |
-| `zenrc-dds` | CycloneDDS FFI 绑定，通过 bindgen 自动生成 |
-| `zenrc-bt` | 纯 Rust 行为树框架，含黑板机制 |
-| `zenrc-shm` | POSIX 共享内存 + 环形缓冲区 + 同步原语 |
-| `zenrc-log` | 基于 tracing 的日志库，支持按时间滚动 |
-| `zenrc-macros` | 过程宏，提供参数注册等元编程能力 |
+## 组件边界
 
-Rust edition: **2024**
+- [zenrc/src/main.rs](zenrc/src/main.rs): 集成示例与运行入口（tokio + dds 封装）。
+- [zenrc/src/dds/mod.rs](zenrc/src/dds/mod.rs): dds 封装模块入口（context/publisher/subscriber/service/qos/waitset/topic/error）。
+- [zenrc-dds/build.rs](zenrc-dds/build.rs): FFI 绑定与 IDL 代码生成管线（bindings.rs/msg_bindings.rs/包装代码）。
+- [zenrc-dds/src/lib.rs](zenrc-dds/src/lib.rs): dds 低层导出与生成代码入口。
+- [zenrc-shm/src/lib.rs](zenrc-shm/src/lib.rs): 共享内存模块导出（shm/sync/ringbuffer/errors）。
+- [zenrc-log/src/lib.rs](zenrc-log/src/lib.rs): tracing 日志入口。
+- [zenrc-bt/src/lib.rs](zenrc-bt/src/lib.rs): 行为树核心 trait 与节点语义。
+- [zenrc-macros/src/lib.rs](zenrc-macros/src/lib.rs): 过程宏实现。
 
-## 核心约定
+## zenrc 结构
 
-### 错误处理
+- `zenrc` 是工作区里的应用层 crate，负责把 `zenrc-dds` 的底层绑定组织成更易用的发布/订阅/服务接口。
+- 当前目录结构:
+  - [zenrc/src/main.rs](zenrc/src/main.rs): 运行示例，展示 `DdsContext`、`ServiceServer`、`ServiceClient` 的组合方式。
+  - [zenrc/src/dds/mod.rs](zenrc/src/dds/mod.rs): 本地 dds 封装的模块声明入口。
+  - [zenrc/src/dds/context.rs](zenrc/src/dds/context.rs): `DomainParticipant` 与 `DdsContext`，负责实体创建、共享 WaitSet、异步通知注册。
+  - [zenrc/src/dds/service.rs](zenrc/src/dds/service.rs): service/client 封装，包含同步请求获取与事件回调模式。
+  - [zenrc/src/dds/publisher.rs](zenrc/src/dds/publisher.rs): publisher 封装与写入接口。
+  - [zenrc/src/dds/subscriber.rs](zenrc/src/dds/subscriber.rs): subscriber 封装、take/read API 与异步 stream 支持。
+  - [zenrc/src/dds/topic.rs](zenrc/src/dds/topic.rs): topic 句柄与生命周期管理。
+  - [zenrc/src/dds/qos.rs](zenrc/src/dds/qos.rs): QoS builder 与默认策略。
+  - [zenrc/src/dds/waitset.rs](zenrc/src/dds/waitset.rs): WaitSet/GuardCondition 的同步等待封装。
+  - [zenrc/src/dds/error.rs](zenrc/src/dds/error.rs): dds 相关错误类型与返回码转换。
+  - [zenrc/src/dds/async_stream.rs](zenrc/src/dds/async_stream.rs): 仅在 `async` feature 下启用，提供订阅流适配。
+- 代码定位建议:
+  - 改“实体如何创建/附加到上下文”时，先看 `context.rs`。
+  - 改“服务/客户端行为”时，先看 `service.rs`。
+  - 改“订阅读取语义或异步流”时，先看 `subscriber.rs`。
+  - 改“阻塞等待或触发机制”时，先看 `waitset.rs`。
 
-- 各 crate 定义自己的 `#[derive(Error)] enum` 错误类型（`thiserror`），并提供 `type Result<T> = std::result::Result<T, XxxError>` 别名
-- `anyhow` 用于应用层（跨 crate 错误聚合），`thiserror` 用于库层（结构化错误）
-- FFI 返回值通过辅助函数校验，例如 `check_entity(entity: dds_entity_t) -> Result<dds_entity_t>`
+## 代理执行约定
 
-### Unsafe 代码
+- 优先最小改动: 只改与任务直接相关的 crate 和文件。
+- 改动 zenrc-dds 生成流程相关代码时，同时检查 build.rs 中环境缓存逻辑，避免误判为“代码无效”。
+- 涉及消息类型时，优先沿用现有导入方式（zenrc 中使用 zenrc_dds::std_msgs）。
+- 若任务涉及接口行为变更，至少执行:
+  - cargo test --workspace
+  - 与改动 crate 对应的 example 或最小运行命令
 
-- FFI 调用和 `std::mem::zeroed()` 等操作必须包裹在 `unsafe {}` 块中
-- 每处 `unsafe impl Send/Sync` 必须附带 `// SAFETY: ...` 注释说明线程安全原因
+## 现有测试位置（便于快速验证）
 
-### DDS 模块（`zenrc/src/dds/`）
+- [zenrc/src/dds/qos.rs](zenrc/src/dds/qos.rs): QoS 单元测试
+- [zenrc-log/src/appender/non_blocking.rs](zenrc-log/src/appender/non_blocking.rs): 非阻塞日志 appender 测试
 
-关键文件：[`error.rs`](zenrc/src/dds/error.rs) · [`qos.rs`](zenrc/src/dds/qos.rs) · [`domain.rs`](zenrc/src/dds/domain.rs) · [`topic.rs`](zenrc/src/dds/topic.rs) · [`publisher.rs`](zenrc/src/dds/publisher.rs) · [`subscriber.rs`](zenrc/src/dds/subscriber.rs) · [`waitset.rs`](zenrc/src/dds/waitset.rs)
+## 文档链接（只链接，不复制）
 
-- `DomainParticipant` 持有 `Arc<ParticipantInner>`，`Publisher<T>` 和 `Subscription<T>` 持有该 Arc，确保 **销毁顺序**：Writer/Reader → Topic → Participant
-- 所有消息类型须实现 `RawMessageBridge` trait（定义在 `zenrc-dds/src/lib.rs`），提供 `to_raw()` / `from_raw()` / `free_contents()` 转换
-- 消息类型在构建时由 `msg_gen.rs` 从 IDL 自动生成，勿手动修改生成代码
-
-### 行为树（`zenrc-bt`）
-
-- 节点实现 `Node` trait，必须覆写 `update()` 方法返回 `Status`
-- 复合节点实现 `Composite: Node`；黑板通过 `BlackboardPtr`（`Arc<RefCell<HashMap<String, Box<dyn Any>>>>>`）共享数据
-- 参考示例：[`zenrc-bt/examples/printonde.rs`](zenrc-bt/examples/printonde.rs)
-
-### 共享内存（`zenrc-shm`）
-
-- `MemoryHandle` 封装 POSIX `shm_open` + `mmap`；所有者用 `new()` 创建，其他进程用 `open()` 只读挂载
-- 通过 `Drop` 自动清理；并发访问使用 `SharedMutex`（基于 POSIX `pthread_mutex`）
-
-## 构建环境变量（zenrc-dds）
-
-| 变量 | 用途 |
-|---|---|
-| `AMENT_PREFIX_PATH` | ROS2 安装路径，用于 IDL 文件发现 |
-| `ROS_DISTRO` | ROS2 版本（humble/jazzy/rolling 等） |
-| `CMAKE_PREFIX_PATH` | pkg-config 查找 CycloneDDS 的路径 |
-| `CMAKE_IDL_PACKAGES` | 限定需要绑定的 IDL 包（可选） |
-| `IDL_PACKAGE_FILTER` | IDL 包过滤器（可选） |
-| `DDS_IDL_PATH` | 自定义 IDL 文件路径（可选） |
-
-构建系统对这 6 个变量的 SHA256 哈希做缓存，变量未变则跳过重新生成绑定。
-
-## 参考文档
-
-- [DDS 绑定 API 参考](zenrc-dds/DDS_BINDINGS_API.md) — 326 个 CycloneDDS 函数分类说明
-- [README](README.md) — 各模块功能概述与路线图
+- 项目总览与快速命令: [README.md](README.md)
+- CycloneDDS API 分类参考: [zenrc-dds/DDS_BINDINGS_API.md](zenrc-dds/DDS_BINDINGS_API.md)
