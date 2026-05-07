@@ -1,13 +1,14 @@
-use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
 use zenrc_dds::{
-    DDS_ANY_STATE, RawMessageBridge, Sample, SampleInfo, dds_entity_t, dds_instance_handle_t,
-    dds_sample_info_t,
+    RawMessageBridge, Sample, dds_entity_t, dds_instance_handle_t,
 };
 
+use super::common::{
+    take_one,
+};
 use super::error::{DdsError, Result, check_entity, check_ret};
 use super::topic::Topic;
 
@@ -47,67 +48,6 @@ impl<T: RawMessageBridge> Subscription<T> {
         #[cfg(feature = "async")]
         let notify = Some(context.attach(self.reader));
         self.notify = notify;
-    }
-
-    // ── Take：取出并从缓存中移除 ───────────────────────────────────────────────
-
-    /// 取出最多 `max` 条新样本（移除出读者缓存）
-    ///
-    /// 只返回 `valid_data = true` 的样本。
-    pub fn take(&self, max: usize) -> Result<Vec<Sample<T>>> {
-        self.take_with_mask(max, DDS_ANY_STATE)
-    }
-
-    /// 取出单条最新样本，若无可用样本则返回 `None`
-    pub fn take_one(&self) -> Result<Option<Sample<T>>> {
-        Ok(self.take(1)?.into_iter().next())
-    }
-
-    /// 带状态掩码的 take（`mask` 是 `DDS_*_STATE` 常量的组合）
-    pub fn take_with_mask(&self, max: usize, mask: u32) -> Result<Vec<Sample<T>>> {
-        self.read_or_take(max, mask, true)
-    }
-
-    // ── Read：读取但不移除（标记为已读）────────────────────────────────────────
-
-    /// 读取最多 `max` 条样本（标记为已读，不从缓存中移除）
-    pub fn read(&self, max: usize) -> Result<Vec<Sample<T>>> {
-        self.read_with_mask(max, DDS_ANY_STATE)
-    }
-
-    /// 读取单条最新样本，若无可用样本则返回 `None`
-    pub fn read_one(&self) -> Result<Option<Sample<T>>> {
-        Ok(self.read(1)?.into_iter().next())
-    }
-
-    /// 带状态掩码的 read
-    pub fn read_with_mask(&self, max: usize, mask: u32) -> Result<Vec<Sample<T>>> {
-        self.read_or_take(max, mask, false)
-    }
-
-    // ── Peek：取出但不改变状态 ──────────────────────────────────────────────────
-
-    /// 读取最多 `max` 条样本但不改变样本/实例状态（peek）
-    pub fn peek(&self, max: usize) -> Result<Vec<Sample<T>>> {
-        let mut raw_samples: Vec<T::CStruct> =
-            (0..max).map(|_| unsafe { std::mem::zeroed() }).collect();
-        let mut ptrs: Vec<*mut c_void> = raw_samples
-            .iter_mut()
-            .map(|s| s as *mut T::CStruct as *mut c_void)
-            .collect();
-        let mut infos: Vec<dds_sample_info_t> = vec![unsafe { std::mem::zeroed() }; max];
-
-        let n = unsafe {
-            zenrc_dds::dds_peek(
-                self.reader,
-                ptrs.as_mut_ptr(),
-                infos.as_mut_ptr(),
-                max,
-                max as u32,
-            )
-        };
-
-        self.collect_samples(n, raw_samples, infos)
     }
 
     // ── 状态查询 ──────────────────────────────────────────────────────────────
@@ -174,15 +114,16 @@ impl<T: RawMessageBridge> Subscription<T> {
         };
 
         // 先快路径尝试一次，避免错过已到达但尚未消费的数据。
-        if let Some(sample) = self.take_one()? {
+        if let Some(sample) = take_one::<T>(self.reader)? {
             return Ok(sample);
         }
 
+        let reader = self.reader;
         let wait_fut = async {
             loop {
                 notify.notified().await;
 
-                if let Some(sample) = self.take_one()? {
+                if let Some(sample) = take_one::<T>(reader)? {
                     return Ok(sample);
                 }
             }
@@ -194,71 +135,6 @@ impl<T: RawMessageBridge> Subscription<T> {
         }
     }
 
-    // ── 内部实现 ──────────────────────────────────────────────────────────────
-
-    fn read_or_take(&self, max: usize, mask: u32, take: bool) -> Result<Vec<Sample<T>>> {
-        if max == 0 {
-            return Ok(Vec::new());
-        }
-
-        let mut raw_samples: Vec<T::CStruct> =
-            (0..max).map(|_| unsafe { std::mem::zeroed() }).collect();
-        let mut ptrs: Vec<*mut c_void> = raw_samples
-            .iter_mut()
-            .map(|s| s as *mut T::CStruct as *mut c_void)
-            .collect();
-        let mut infos: Vec<dds_sample_info_t> = vec![unsafe { std::mem::zeroed() }; max];
-
-        let n = unsafe {
-            if take {
-                zenrc_dds::dds_take_mask(
-                    self.reader,
-                    ptrs.as_mut_ptr(),
-                    infos.as_mut_ptr(),
-                    max,
-                    max as u32,
-                    mask,
-                )
-            } else {
-                zenrc_dds::dds_read_mask(
-                    self.reader,
-                    ptrs.as_mut_ptr(),
-                    infos.as_mut_ptr(),
-                    max,
-                    max as u32,
-                    mask,
-                )
-            }
-        };
-
-        self.collect_samples(n, raw_samples, infos)
-    }
-
-    fn collect_samples(
-        &self,
-        n: i32,
-        raw_samples: Vec<T::CStruct>,
-        infos: Vec<dds_sample_info_t>,
-    ) -> Result<Vec<Sample<T>>> {
-        if n < 0 {
-            return Err(DdsError::RetCode(n, "dds_take/read failed".into()));
-        }
-        let n = n as usize;
-
-        let mut result = Vec::with_capacity(n);
-        for (raw, raw_info) in raw_samples.into_iter().zip(infos.into_iter()).take(n) {
-            if raw_info.valid_data {
-                let inner = T::from_raw(raw);
-                result.push(Sample {
-                    inner,
-                    info: SampleInfo::from(raw_info),
-                });
-            } else {
-                let _ = T::from_raw(raw);
-            }
-        }
-        Ok(result)
-    }
 }
 
 // ─── 异步扩展（feature = "async"）─────────────────────────────────────────────
@@ -287,22 +163,10 @@ impl<T: RawMessageBridge + Send + 'static> Subscription<T> {
                 notify.notified().await;
 
                 loop {
-                    let mut raw: T::CStruct = unsafe { std::mem::zeroed() };
-                    let mut ptr: *mut c_void = &mut raw as *mut T::CStruct as *mut c_void;
-                    let mut info: dds_sample_info_t = unsafe { std::mem::zeroed() };
-
-                    let taken = unsafe { zenrc_dds::dds_take(reader, &mut ptr, &mut info, 1, 1) };
-                    if taken <= 0 {
-                        break;
-                    }
-
-                    if info.valid_data {
-                        (handler)(Sample {
-                            inner: T::from_raw(raw),
-                            info: SampleInfo::from(info),
-                        });
-                    } else {
-                        let _ = T::from_raw(raw);
+                    match take_one::<T>(reader) {
+                        Ok(Some(sample)) => (handler)(sample),
+                        Ok(None) => break,
+                        Err(_) => break,
                     }
                 }
             }

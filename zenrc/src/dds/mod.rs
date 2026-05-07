@@ -1,3 +1,4 @@
+pub mod common;
 pub mod error;
 pub mod qos;
 pub mod publisher;

@@ -1,13 +1,15 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+use criterion::{Criterion, criterion_group, criterion_main};
 
 #[path = "../src/dds/mod.rs"]
 mod dds;
 
 use dds::context::DdsContext;
 use dds::qos::Qos;
+use dds::common::take_one;
 use zenrc_dds::{RawMessageBridge, std_msgs};
 
 static TOPIC_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -33,8 +35,7 @@ fn wait_for_match(publisher: &dds::publisher::Publisher<std_msgs::msg::String>) 
 
 fn drain_one(subscriber: &dds::subscriber::Subscription<std_msgs::msg::String>) {
     for _ in 0..20_000 {
-        if let Some(sample) = subscriber
-            .take_one()
+        if let Some(sample) = take_one::<std_msgs::msg::String>(subscriber.entity())
             .expect("take_one should not fail while draining")
         {
             black_box(sample);
@@ -180,7 +181,7 @@ fn bench_take_time(c: &mut Criterion) {
 
                 loop {
                     let t0 = Instant::now();
-                    let sample = io.subscriber.take_one().expect("take_one in take bench");
+                    let sample = take_one::<std_msgs::msg::String>(io.subscriber.entity()).expect("take_one in take bench");
                     match sample {
                         Some(s) => {
                             total += t0.elapsed();

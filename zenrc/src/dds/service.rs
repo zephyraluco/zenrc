@@ -4,9 +4,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use zenrc_dds::{
-    DDS_ANY_STATE, RawMessageBridge, Sample, SampleInfo, dds_entity_t, dds_sample_info_t,
+    DDS_ANY_STATE, RawMessageBridge, Sample, dds_entity_t,
 };
 
+use super::common::take_one;
 use super::error::{DdsError, Result, check_entity, check_ret};
 use super::qos::duration_to_nanos;
 use super::topic::Topic;
@@ -62,24 +63,7 @@ impl<Req: RawMessageBridge, Res: RawMessageBridge> ServiceServer<Req, Res> {
     }
 
     fn take_one_request(reader: dds_entity_t) -> Result<Option<Sample<Req>>> {
-        let mut raw: Req::CStruct = unsafe { std::mem::zeroed() };
-        let mut ptr: *mut c_void = &mut raw as *mut Req::CStruct as *mut c_void;
-        let mut info: dds_sample_info_t = unsafe { std::mem::zeroed() };
-        let taken = unsafe { zenrc_dds::dds_take(reader, &mut ptr, &mut info, 1, 1) };
-        if taken < 0 {
-            return Err(DdsError::RetCode(taken, "dds_take failed".into()));
-        }
-        if taken == 0 || !info.valid_data {
-            if taken > 0 {
-                let _ = Req::from_raw(raw);
-            }
-            return Ok(None);
-        }
-
-        Ok(Some(Sample {
-            inner: Req::from_raw(raw),
-            info: SampleInfo::from(info),
-        }))
+        take_one(reader)
     }
 
     /// 在给定超时时间内异步等待下一条请求并返回该样本。
@@ -243,22 +227,7 @@ impl<Req: RawMessageBridge, Res: RawMessageBridge> ServiceClient<Req, Res> {
         }
 
         // 取出应答
-        let mut raw_res: Res::CStruct = unsafe { std::mem::zeroed() };
-        let mut ptr: *mut c_void = &mut raw_res as *mut Res::CStruct as *mut c_void;
-        let mut info: dds_sample_info_t = unsafe { std::mem::zeroed() };
-
-        let taken = unsafe {
-            zenrc_dds::dds_take(self.reader, &mut ptr, &mut info, 1, 1)
-        };
-
-        if taken < 0 {
-            return Err(DdsError::RetCode(taken, "dds_take failed".into()));
-        }
-        if taken == 0 || !info.valid_data {
-            return Ok(None);
-        }
-
-        Ok(Some(Res::from_raw(raw_res)))
+        Ok(take_one::<Res>(self.reader)?.map(|sample| sample.into_parts().0))
     }
 }
 
