@@ -102,39 +102,6 @@ impl<T: RawMessageBridge> Subscription<T> {
         self.topic.entity
     }
 
-    /// 在给定超时时间内等待下一条样本并返回。
-    pub async fn next(&self, timeout: Duration) -> Result<Sample<T>> {
-        let notify = match self.notify.clone() {
-            Some(n) => n,
-            None => {
-                return Err(DdsError::NullPtr(
-                    "订阅未附加到任何 DdsContext，无法等待下一条样本".into(),
-                ));
-            }
-        };
-
-        // 先快路径尝试一次，避免错过已到达但尚未消费的数据。
-        if let Some(sample) = take_one::<T>(self.reader)? {
-            return Ok(sample);
-        }
-
-        let reader = self.reader;
-        let wait_fut = async {
-            loop {
-                notify.notified().await;
-
-                if let Some(sample) = take_one::<T>(reader)? {
-                    return Ok(sample);
-                }
-            }
-        };
-
-        match tokio::time::timeout(timeout, wait_fut).await {
-            Ok(res) => res,
-            Err(_) => Err(DdsError::Timeout("等待订阅样本超时".into())),
-        }
-    }
-
 }
 
 // ─── 异步扩展（feature = "async"）─────────────────────────────────────────────

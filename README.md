@@ -77,3 +77,53 @@ cargo test --workspace
 cargo run --example printonde -p zenrc-bt
 cargo run --example span -p zenrc-log
 ```
+
+## CycloneDDS 配置
+
+如果要启用基于 iceoryx2 的共享内存消息通道，则需要声明一个XML 配置文件，内容如下：
+
+```xml
+<?xml version="1.0" encoding="UTF-8" ?>
+<CycloneDDS xmlns="https://cdds.io/config"
+			xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+			xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/iceoryx/etc/cyclonedds.xsd">
+	<Domain id="any">
+		<General>
+			<Interfaces>
+				<PubSubMessageExchange type="iox2" library="psmx_iox2" config="LOG_LEVEL=INFO;"/>
+			</Interfaces>
+		</General>
+	</Domain>
+	<Tracing>
+		<Verbosity>config</Verbosity>
+		<OutputFile>/absolute/path/to/cyclonedds.log</OutputFile>
+	</Tracing>
+</CycloneDDS>
+```
+
+配置项说明：
+
+- `Domain id="any"`：允许 CycloneDDS 在任意 domain id 下复用这份配置。
+- `PubSubMessageExchange`：启用 `psmx_iox2` 插件，把支持的 pub/sub 数据路径切到 iceoryx2 共享内存通道。
+- `config="LOG_LEVEL=INFO;"`：设置该共享内存插件的日志级别，便于观察初始化过程。
+- `Tracing/Verbosity=config`：输出配置级别日志，确认 XML 是否被正确解析。
+- `Tracing/OutputFile`：把 CycloneDDS 的追踪日志写到仓库根目录的 `cyclonedds.log`。
+
+请把 `OutputFile` 改成当前机器上的有效绝对路径。
+
+使用方法：
+
+1. 先确认本机已安装 CycloneDDS，并且 `psmx_iox2` 对应插件可被运行时加载。
+2. 在运行你的应用、测试或 benchmark 之前，导出配置文件路径：
+
+```bash
+export CYCLONEDDS_URI="file:///absolute/path/to/cyclonedds.xml"
+```
+
+3. 再执行需要 DDS 环境的命令，例如：
+
+```bash
+cargo run -p <your-crate>
+```
+
+4. 如果需要确认配置是否生效，查看 `OutputFile` 对应路径下的日志，其中应能看到 `psmx_iox2`、`iox2` 和 `OutputFile` 等配置项被解析的记录。

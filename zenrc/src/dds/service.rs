@@ -66,37 +66,6 @@ impl<Req: RawMessageBridge, Res: RawMessageBridge> ServiceServer<Req, Res> {
         take_one(reader)
     }
 
-    /// 在给定超时时间内异步等待下一条请求并返回该样本。
-    #[cfg(feature = "async")]
-    pub async fn next(&self, timeout: Duration) -> Result<Sample<Req>> {
-        let notify = match self.notify.clone() {
-            Some(n) => n,
-            None => {
-                return Err(DdsError::NullPtr(
-                    "ServiceServer 未附加到 DdsContext，无法等待下一条请求".into(),
-                ));
-            }
-        };
-
-        if let Some(sample) = Self::take_one_request(self.reader)? {
-            return Ok(sample);
-        }
-
-        let wait_fut = async {
-            loop {
-                notify.notified().await;
-                if let Some(sample) = Self::take_one_request(self.reader)? {
-                    return Ok(sample);
-                }
-            }
-        };
-
-        match tokio::time::timeout(timeout, wait_fut).await {
-            Ok(res) => res,
-            Err(_) => Err(DdsError::Timeout("等待服务请求超时".into())),
-        }
-    }
-
     /// 注册事件回调：当共享 WaitSet 的 notify 被唤醒时，在 tokio 任务中执行 `handler`。
     ///
     /// 该函数会启动后台任务并返回任务句柄。任务生命周期由调用方管理。

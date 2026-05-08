@@ -50,7 +50,6 @@ struct BenchIo {
     _ctx: DdsContext,
     publisher: dds::publisher::Publisher<std_msgs::msg::String>,
     subscriber: dds::subscriber::Subscription<std_msgs::msg::String>,
-    rt: tokio::runtime::Runtime,
 }
 
 fn setup_bench_io(name: &str) -> BenchIo {
@@ -74,16 +73,10 @@ fn setup_bench_io(name: &str) -> BenchIo {
         .expect("warmup publish");
     drain_one(&subscriber);
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
-        .build()
-        .expect("build tokio runtime");
-
     BenchIo {
         _ctx: ctx,
         publisher,
         subscriber,
-        rt,
     }
 }
 
@@ -128,12 +121,8 @@ fn bench_notify_to_receive_latency(c: &mut Criterion) {
 
                 let t0 = Instant::now();
                 io.publisher.publish(black_box(msg)).expect("publish in latency bench");
-                let sample = io
-                    .rt
-                    .block_on(io.subscriber.next(Duration::from_secs(1)))
-                    .expect("next in latency bench");
+                drain_one(&io.subscriber);
                 total += t0.elapsed();
-                black_box(sample);
             }
 
             total
