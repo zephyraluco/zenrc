@@ -3,11 +3,14 @@ mod dds;
 use std::time::Duration;
 
 use dds::context::DdsContext;
+use dds::log;
 use dds::qos::Qos;
 use zenrc_dds::std_msgs;
 
 #[tokio::main]
 async fn main() {
+    log::init();
+
     let ctx = DdsContext::new(0).expect("创建 DDS 上下文失败");
 
     // 工厂方法内部使用 ROS2 命名约定：

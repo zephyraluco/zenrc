@@ -1,5 +1,6 @@
 pub mod common;
 pub mod error;
+pub mod log;
 pub mod qos;
 pub mod publisher;
 pub mod subscriber;
