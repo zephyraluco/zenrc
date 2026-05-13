@@ -3,11 +3,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use zenrc_dds::{
-    RawMessageBridge, Sample, dds_entity_t, dds_instance_handle_t,
+    CdrSample, LoanedSample, RawMessageBridge, Sample, dds_entity_t, dds_instance_handle_t
 };
 
 use super::common::{
+    peek_cdr,
+    read_cdr,
+    read_one_wl,
+    read_wl,
+    take_cdr,
     take_one,
+    take_one_wl,
+    take_wl,
 };
 use super::error::{DdsError, Result, check_entity, check_ret};
 use super::topic::Topic;
@@ -100,6 +107,41 @@ impl<T: RawMessageBridge> Subscription<T> {
     /// 返回关联 Topic 的实体句柄
     pub fn topic_entity(&self) -> dds_entity_t {
         self.topic.entity
+    }
+
+    /// 读取数据（借用内存）
+    pub fn read_wl(&self, max: usize) -> Result<Vec<LoanedSample<T>>> {
+        read_wl(self.reader, max)
+    }
+
+    /// 读取下一条数据（借用内存）
+    pub fn read_one_wl(&self) -> Result<Option<LoanedSample<T>>> {
+        read_one_wl(self.reader)
+    }
+
+    /// 取出数据（借用内存）
+    pub fn take_wl(&self, max: usize) -> Result<Vec<LoanedSample<T>>> {
+        take_wl(self.reader, max)
+    }
+
+    /// 取出下一条数据（借用内存）
+    pub fn take_one_wl(&self) -> Result<Option<LoanedSample<T>>> {
+        take_one_wl(self.reader)
+    }
+
+    /// 以 CDR 格式取出数据（不反序列化）
+    pub fn take_cdr(&self, max: usize) -> Result<Vec<CdrSample>> {
+        take_cdr(self.reader, max)
+    }
+
+    /// 以 CDR 格式读取数据（不反序列化，消息留在缓存中）
+    pub fn read_cdr(&self, max: usize) -> Result<Vec<CdrSample>> {
+        read_cdr(self.reader, max)
+    }
+
+    /// 以 CDR 格式预览数据（不改变状态）
+    pub fn peek_cdr(&self, max: usize) -> Result<Vec<CdrSample>> {
+        peek_cdr(self.reader, max)
     }
 
 }

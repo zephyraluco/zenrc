@@ -5,8 +5,9 @@ use std::time::Duration;
 use super::error::{check_entity, check_ret, Result};
 use super::qos::duration_to_nanos;
 use super::topic::Topic;
-use zenrc_dds::RawMessageBridge;
+use zenrc_dds::{CdrSample, RawMessageBridge};
 use zenrc_dds::{dds_entity_t, dds_instance_handle_t};
+use super::common::{forward_cdr, write_cdr};
 
 /// 类型化 DDS 写者（Publisher）。
 ///
@@ -43,17 +44,19 @@ impl<T: RawMessageBridge> Publisher<T> {
         })
     }
 
-    /// 发布消息并附带自定义时间戳（纳秒，相对 DDS 纪元）
-    pub fn publish_with_timestamp(&self, msg: T, timestamp_ns: i64) -> Result<()> {
-        let raw = msg.to_raw();
+    /// 发布消息并立即刷新（确保消息被发送到网络层，便于性能测试）
+    pub fn flush(&self) -> Result<()> {
         check_ret(unsafe {
-            zenrc_dds::dds_write_ts(self.writer, &raw as *const _ as *const c_void, timestamp_ns)
+            zenrc_dds::dds_write_flush(self.writer)
         })
     }
 
     /// 发布消息并附带 `Duration`（从系统启动计算，便于与 `std::time::SystemTime` 结合）
     pub fn publish_with_duration(&self, msg: T, timestamp: Duration) -> Result<()> {
-        self.publish_with_timestamp(msg, duration_to_nanos(timestamp))
+        let raw = msg.to_raw();
+        check_ret(unsafe {
+            zenrc_dds::dds_write_ts(self.writer, &raw as *const _ as *const c_void, duration_to_nanos(timestamp))
+        })
     }
 
     /// 返回底层 DDS writer 实体句柄
@@ -64,6 +67,16 @@ impl<T: RawMessageBridge> Publisher<T> {
     /// 返回关联 Topic 的实体句柄
     pub fn topic_entity(&self) -> dds_entity_t {
         self.topic.entity
+    }
+
+    /// 写入 CDR 序列化数据（不需要反序列化，直接传递 ddsi_serdata）
+    pub fn write_cdr(&self, cdr: CdrSample) -> Result<()> {
+        write_cdr(self.writer, cdr)
+    }
+
+    /// 转发 CDR 序列化数据（网关/代理场景，保留原始时间戳）
+    pub fn forward_cdr(&self, cdr: CdrSample) -> Result<()> {
+        forward_cdr(self.writer, cdr)
     }
 
     // ── 状态查询 ──────────────────────────────────────────────────────────────
@@ -100,7 +113,6 @@ impl<T: RawMessageBridge> Publisher<T> {
 impl<T: RawMessageBridge> Drop for Publisher<T> {
     fn drop(&mut self) {
         unsafe { zenrc_dds::dds_delete(self.writer) };
-        // topic 由 self.topic (Topic<T>) 的 Drop 自动删除
     }
 }
 
