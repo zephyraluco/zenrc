@@ -1780,11 +1780,8 @@ dependencies = [
  "bindgen",
  "cc",
  "pkg-config",
- "prettyplease",
- "proc-macro2",
- "quote",
  "sha2",
- "syn",
+ "zenrc-msgen",
 ]
 
 [[package]]
@@ -1802,6 +1799,18 @@ dependencies = [
 name = "zenrc-macros"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "zenrc-msgen"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "cc",
+ "prettyplease",
  "proc-macro2",
  "quote",
  "syn",
