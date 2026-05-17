@@ -1796,15 +1796,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "zenrc-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "zenrc-msgen"
 version = "0.1.0"
 dependencies = [

@@ -1,11 +1,8 @@
-#[path = "../src/dds/mod.rs"]
-mod dds;
-
 use std::time::Duration;
 
-use dds::context::DdsContext;
-use dds::qos::Qos;
-use zenrc_dds::std_msgs;
+use zenrc::dds::context::DdsContext;
+use zenrc::dds::qos::Qos;
+use zenrc::msg::std_msgs;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
