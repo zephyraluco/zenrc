@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "demo_chatter",
         Qos::sensor_data(),
     )?;
-    let subscriber = ctx.create_subscription::<std_msgs::msg::String>(
+    let subscriber = ctx.create_subscriber::<std_msgs::msg::String>(
         "demo_chatter",
         Qos::sensor_data(),
     )?;

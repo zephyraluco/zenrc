@@ -1,5 +1,4 @@
 use std::ffi::c_void;
-#[cfg(feature = "async")]
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,7 +24,6 @@ pub struct ServiceServer<Req: RawMessageBridge, Res: RawMessageBridge> {
     writer: dds_entity_t,
     _req_topic: Topic<Req>,
     _res_topic: Topic<Res>,
-    #[cfg(feature = "async")]
     notify: Option<Arc<tokio::sync::Notify>>,
 }
 
@@ -42,7 +40,6 @@ impl<Req: RawMessageBridge, Res: RawMessageBridge> ServiceServer<Req, Res> {
             writer,
             _req_topic: req_topic,
             _res_topic: res_topic,
-            #[cfg(feature = "async")]
             notify: None,
         }
     }
@@ -55,10 +52,7 @@ impl<Req: RawMessageBridge, Res: RawMessageBridge> ServiceServer<Req, Res> {
         &mut self,
         context: &super::context::DdsContext,
     ) {
-        #[cfg(feature = "async")]
         let notify = Some(context.attach(self.reader));
-        #[cfg(not(feature = "async"))]
-        let _ = context;
         self.notify = notify;
     }
 
@@ -69,7 +63,6 @@ impl<Req: RawMessageBridge, Res: RawMessageBridge> ServiceServer<Req, Res> {
     /// 注册事件回调：当共享 WaitSet 的 notify 被唤醒时，在 tokio 任务中执行 `handler`。
     ///
     /// 该函数会启动后台任务并返回任务句柄。任务生命周期由调用方管理。
-    #[cfg(feature = "async")]
     pub fn set_event<F>(&self, handler: F) -> Result<tokio::task::JoinHandle<()>>
     where
         F: Fn(Sample<Req>) -> Res + Send + Sync + 'static,

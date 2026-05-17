@@ -102,7 +102,7 @@ impl DomainParticipant {
     }
 
     /// 创建订阅者（自动创建 Topic，不附加到任何 WaitSet）
-    pub fn create_subscription<T: RawMessageBridge>(
+    pub fn create_subscriber<T: RawMessageBridge>(
         &self,
         topic_name: &str,
         qos: Qos,
@@ -163,7 +163,6 @@ struct ReaderEntry {
     /// 已附加到 WaitSet 的 ReadCondition 实体句柄
     readcond: dds_entity_t,
     /// 数据到达时唤醒等待方的通知句柄
-    #[cfg(feature = "async")]
     notify: Arc<tokio::sync::Notify>,
 }
 
@@ -174,7 +173,7 @@ struct ReaderEntry {
 /// DDS 上下文（RAII），包含 [`DomainParticipant`] 和后台 WaitSet 轮询线程。
 ///
 /// 调用 [`DdsContext::new`] 同时创建域参与者和共享 WaitSet。
-/// 通过 [`DdsContext::create_subscription`] 创建的订阅者会自动将 ReadCondition
+/// 通过 [`DdsContext::create_subscriber`] 创建的订阅者会自动将 ReadCondition
 /// 附加到本实例的 WaitSet，数据到达时后台线程通过 [`tokio::sync::Notify`]
 /// 唤醒等待中的异步 API。
 ///
@@ -188,7 +187,7 @@ struct ReaderEntry {
 ///
 /// let ctx = DdsContext::new(0)?;
 /// let publisher = ctx.create_publisher::<MyMsg>("chatter", Qos::sensor_data())?;
-/// let subscriber = ctx.create_subscription::<MyMsg>("chatter", Qos::sensor_data())?;
+/// let subscriber = ctx.create_subscriber::<MyMsg>("chatter", Qos::sensor_data())?;
 /// ```
 pub struct DdsContext {
     /// 域参与者；也可直接用于同步操作（创建的 Subscription 不会附加到 WaitSet）
@@ -196,7 +195,6 @@ pub struct DdsContext {
     waitset: dds_entity_t,
     guard: dds_entity_t,
     running: Arc<AtomicBool>,
-    #[cfg(feature = "async")]
     pending: Arc<Mutex<Vec<(dds_entity_t, Arc<tokio::sync::Notify>)>>>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -242,12 +240,10 @@ impl DdsContext {
         }
 
         let running = Arc::new(AtomicBool::new(true));
-        #[cfg(feature = "async")]
         let pending = Arc::new(Mutex::new(Vec::<(dds_entity_t, Arc<tokio::sync::Notify>)>::new()));
 
         let handle = {
             let running = Arc::clone(&running);
-            #[cfg(feature = "async")]
             let pending = Arc::clone(&pending);
             thread::Builder::new()
                 .name("dds-context".into())
@@ -256,7 +252,6 @@ impl DdsContext {
                         ws,
                         guard,
                         running,
-                        #[cfg(feature = "async")]
                         pending,
                     )
                 })
@@ -268,7 +263,6 @@ impl DdsContext {
             waitset: ws,
             guard,
             running,
-            #[cfg(feature = "async")]
             pending,
             thread: Some(handle),
         })
@@ -326,11 +320,11 @@ impl DdsContext {
     /// 创建订阅者（自动创建 Topic），并将 ReadCondition 附加到本上下文的 WaitSet。
     ///
     /// 通过此方法创建的 `Subscription` 支持 `set_event` 事件回调。
-    /// 若只需同步访问，可直接使用 `ctx.participant.create_subscription()`。
+    /// 若只需同步访问，可直接使用 `ctx.participant.create_subscriber()`。
     ///
     /// # 泛型参数
     /// - `T`：安全的 Rust 消息类型，必须实现 [`RawMessageBridge`]
-    pub fn create_subscription<T: RawMessageBridge>(
+    pub fn create_subscriber<T: RawMessageBridge>(
         &self,
         topic_name: &str,
         qos: Qos,
@@ -442,8 +436,7 @@ impl DdsContext {
 
     /// 将 reader 加入待处理队列，由后台线程在下一轮循环创建 ReadCondition 并附加到 WaitSet。
     ///
-    /// 由 [`DdsContext::create_subscription`] 在构造 [`Subscription`] 时自动调用。
-    #[cfg(feature = "async")]
+    /// 由 [`DdsContext::create_subscriber`] 在构造 [`Subscription`] 时自动调用。
     pub(crate) fn attach(&self, reader: dds_entity_t) -> Arc<tokio::sync::Notify> {
         let notify = Arc::new(tokio::sync::Notify::new());
         self.pending.lock().unwrap().push((reader, Arc::clone(&notify)));
@@ -474,13 +467,12 @@ fn context_loop(
     waitset: dds_entity_t,
     guard: dds_entity_t,
     running: Arc<AtomicBool>,
-    #[cfg(feature = "async")] pending: Arc<Mutex<Vec<(dds_entity_t, Arc<tokio::sync::Notify>)>>>,
+    pending: Arc<Mutex<Vec<(dds_entity_t, Arc<tokio::sync::Notify>)>>>,
 ) {
     let mut readers: HashMap<isize, ReaderEntry> = HashMap::new();
 
     while running.load(Ordering::Acquire) {
         // ── 处理新增 reader：创建 ReadCondition 并附加到 WaitSet ───────────────
-        #[cfg(feature = "async")]
         {
             let new_readers: Vec<_> = pending.lock().unwrap().drain(..).collect();
             for (reader, notify) in new_readers {
@@ -548,7 +540,6 @@ fn context_loop(
             }
 
             // 唤醒对应订阅者：取 Arc<Notify> 后在锁外调用，防止死锁
-            #[cfg(feature = "async")]
             {
                 let notify = readers.get(&token).map(|e| Arc::clone(&e.notify));
                 if let Some(n) = notify {

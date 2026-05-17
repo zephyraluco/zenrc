@@ -4,17 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["async"]
-async = ["dep:tokio", "dep:futures"]
+default = []
 
 [dependencies]
 zenrc-dds = { path = "../zenrc-dds" }
 thiserror = { workspace = true }
-tokio = { workspace = true, optional = true }
-futures = { workspace = true, optional = true }
+tokio = { workspace = true }
+futures = { workspace = true }
 
 [dev-dependencies]
-criterion = "0.8"
+criterion = { workspace = true }
 
 [[bench]]
 name = "dds_bench"

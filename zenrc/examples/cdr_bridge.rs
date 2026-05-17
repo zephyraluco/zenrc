@@ -30,11 +30,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── 拓扑创建 ─────────────────────────────────────────────────────────────
     // 源端：普通类型化发布者 + CDR 读取订阅者
     let pub_src = ctx.create_publisher::<std_msgs::msg::String>("cdr_src", Qos::sensor_data())?;
-    let sub_cdr = ctx.create_subscription::<std_msgs::msg::String>("cdr_src", Qos::sensor_data())?;
+    let sub_cdr = ctx.create_subscriber::<std_msgs::msg::String>("cdr_src", Qos::sensor_data())?;
 
     // 目标端：CDR 转发发布者 + 普通类型化订阅者
     let pub_dst = ctx.create_publisher::<std_msgs::msg::String>("cdr_dst", Qos::sensor_data())?;
-    let sub_dst = ctx.create_subscription::<std_msgs::msg::String>("cdr_dst", Qos::sensor_data())?;
+    let sub_dst = ctx.create_subscriber::<std_msgs::msg::String>("cdr_dst", Qos::sensor_data())?;
 
     // 等待发现完成
     tokio::time::sleep(Duration::from_millis(300)).await;

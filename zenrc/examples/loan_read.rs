@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let topic = "loan_demo";
     let publisher = ctx.create_publisher::<std_msgs::msg::String>(topic, Qos::sensor_data())?;
     let subscriber =
-        ctx.create_subscription::<std_msgs::msg::String>(topic, Qos::sensor_data())?;
+        ctx.create_subscriber::<std_msgs::msg::String>(topic, Qos::sensor_data())?;
 
     // 等待发现完成
     tokio::time::sleep(Duration::from_millis(200)).await;

@@ -8,7 +8,7 @@ zenrc 是一个面向机器人控制系统的 Rust 工具集，提供行为树�
 DDS 封装层，基于 `zenrc-dds` 提供符合人体工程学的高层接口。
 
 - `DdsContext`：统一管理 DDS 实体的生命周期
-- `Publisher<T>` / `Subscription<T>`：类型安全的发布/订阅
+- `Publisher<T>` / `Subscriber<T>`：类型安全的发布/订阅
 - `ServiceServer<Req, Res>` / `ServiceClient<Req, Res>`：请求-响应服务模式
 - 基于 `async`（tokio）的事件回调与异步 stream
 - `Qos` builder 提供常用默认策略

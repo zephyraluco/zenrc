@@ -7,7 +7,7 @@ edition = "2024"
 
 [build-dependencies]
 zenrc-msgen = { path = "../zenrc-msgen" }
-bindgen = "0.72"
-pkg-config = "0.3"
-cc = "1.0"
-sha2 = "0.11"
+bindgen = { workspace = true }
+pkg-config = { workspace = true }
+cc = { workspace = true }
+sha2 = { workspace = true }

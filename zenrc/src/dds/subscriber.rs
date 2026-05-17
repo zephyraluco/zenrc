@@ -30,7 +30,6 @@ pub struct Subscription<T: RawMessageBridge> {
     topic: Topic<T>,
     _marker: PhantomData<T>,
     /// 异步通知句柄；None 表示该订阅不属于任何 DdsContext
-    #[cfg(feature = "async")]
     notify: Option<Arc<tokio::sync::Notify>>,
 }
 
@@ -40,19 +39,17 @@ impl<T: RawMessageBridge> Subscription<T> {
             reader,
             topic,
             _marker: PhantomData,
-            #[cfg(feature = "async")]
             notify: None,
         }
     }
 
     /// 创建订阅者并附加到指定 DdsContext 的 WaitSet，支持事件回调。
     ///
-    /// 由 [`DdsContext::create_subscription`](super::context::DdsContext::create_subscription) 调用。
+    /// 由 [`DdsContext::create_subscriber`](super::context::DdsContext::create_subscriber) 调用。
     pub(crate) fn with_context(
         &mut self,
         context: &super::context::DdsContext,
     ) {
-        #[cfg(feature = "async")]
         let notify = Some(context.attach(self.reader));
         self.notify = notify;
     }
@@ -146,9 +143,8 @@ impl<T: RawMessageBridge> Subscription<T> {
 
 }
 
-// ─── 异步扩展（feature = "async"）─────────────────────────────────────────────
+// ─── 异步扩展 ─────────────────────────────────────────────────────────────────
 
-#[cfg(feature = "async")]
 impl<T: RawMessageBridge + Send + 'static> Subscription<T> {
     /// 注册事件回调：当共享 WaitSet 的 notify 被唤醒时，在 tokio 任务中处理所有新样本。
     pub fn set_event<F>(&self, handler: F) -> Result<tokio::task::JoinHandle<()>>

@@ -61,8 +61,8 @@ fn setup_bench_io(name: &str) -> BenchIo {
         .create_publisher::<std_msgs::msg::String>(&topic, pub_qos)
         .expect("create publisher");
     let subscriber = ctx
-        .create_subscription::<std_msgs::msg::String>(&topic, sub_qos)
-        .expect("create subscription");
+        .create_subscriber::<std_msgs::msg::String>(&topic, sub_qos)
+        .expect("create subscriber");
 
     wait_for_match(&publisher);
 
