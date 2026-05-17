@@ -62,6 +62,11 @@ fn collect_h_files(dir: &Path) -> Vec<PathBuf> {
 pub fn generate_msg_bindings(idl_out_dir: &Path, out_dir: &Path) {
     let h_files = collect_h_files(idl_out_dir);
     if h_files.is_empty() {
+        // 无 IDL 头文件时写入空文件，保证 include! 宏可以正常编译
+        let out_path = out_dir.join("msg_bindings.rs");
+        if let Err(e) = fs::write(&out_path, "") {
+            println!("cargo:warning=Failed to write empty msg_bindings.rs: {e}");
+        }
         return;
     }
 

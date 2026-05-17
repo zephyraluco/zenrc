@@ -573,6 +573,10 @@ pub fn generate_rust_wrappers(out_dir: &Path) {
         Ok(s) => s,
         Err(e) => {
             println!("cargo:warning=Cannot read msg_bindings.rs: {e}");
+            // 无消息绑定时写入空文件，保证 include! 宏可以正常编译
+            if let Err(we) = fs::write(out_dir.join(WARPPER_TYPES_FILE), "") {
+                println!("cargo:warning=Failed to write empty generate_types.rs: {we}");
+            }
             return;
         }
     };
