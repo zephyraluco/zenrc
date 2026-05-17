@@ -2,11 +2,13 @@
 name = "zenrc-dds"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "CycloneDDS FFI bindings and generated ROS2 message types"
 
 [dependencies]
 
 [build-dependencies]
-zenrc-msgen = { path = "../zenrc-msgen" }
+zenrc-msgen = { path = "../zenrc-msgen", version = "0.1.0" }
 bindgen = { workspace = true }
 pkg-config = { workspace = true }
 cc = { workspace = true }

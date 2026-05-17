@@ -2,12 +2,14 @@
 name = "zenrc"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "High-level DDS publish/subscribe and service framework"
 
 [features]
 default = []
 
 [dependencies]
-zenrc-dds = { path = "../zenrc-dds" }
+zenrc-dds = { path = "../zenrc-dds", version = "0.1.0" }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
