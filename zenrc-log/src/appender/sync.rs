@@ -1,20 +1,9 @@
 //! Abstracts over sync primitive implementations.
 //!
-//! Optionally, we allow the Rust standard library's `RwLock` to be replaced
-//! with the `parking_lot` crate's implementation. This may provide improved
-//! performance in some cases. However, the `parking_lot` dependency is an
-//! opt-in feature flag. Because `parking_lot::RwLock` has a slightly different
-//! API than `std::sync::RwLock` (it does not support poisoning on panics), we
-//! wrap the `std::sync` version to ignore poisoning.
+//! Wraps `std::sync::RwLock` to ignore poisoning on panics.
 
-#[allow(unused_imports)] // may be used later;
-#[cfg(feature = "parking_lot")]
-pub(crate) use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-
-#[cfg(not(feature = "parking_lot"))]
 pub(crate) use self::std_impl::*;
 
-#[cfg(not(feature = "parking_lot"))]
 mod std_impl {
     use std::sync::{self, PoisonError, TryLockError};
     pub(crate) use std::sync::{RwLockReadGuard, RwLockWriteGuard};

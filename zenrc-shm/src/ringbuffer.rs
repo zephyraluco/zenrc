@@ -5,6 +5,10 @@ use crate::errors;
 use crate::shm::MemoryHandle;
 use crate::sync::SharedRwLock;
 
+/// 基于共享内存的多生产者/多消费者无锁环形缓冲区。
+///
+/// 内部用 [`SharedRwLock`] 保护每个槽位，写操作选择下一个槽位并锁写，读操作跟随最新序列号。
+/// 为了跨进程操作，单个进程需以“创建者”身份初始化共享内存（[`MemoryHandle::new`]），其他进程以“打开者”射入同一内存段。
 pub struct MpmcRingBuffer<T> {
     buffer: Vec<SharedRwLock<T>>,
     capacity: *mut usize,

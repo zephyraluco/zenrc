@@ -1,3 +1,32 @@
+//! # zenrc-bt
+//!
+//! 轻量级行为树（Behavior Tree）库。
+//!
+//! ## 核心概念
+//!
+//! - **[`Node`]**：所有行为树节点必须实现的 trait，通过 [`Node::tick`] 驱动状态机。
+//! - **[`Status`]**：节点执行结果（`Invalid` / `Running` / `Success` / `Failure`）。
+//! - **[`BlackboardPtr`]**：基于 `Arc<RefCell<HashMap>>` 的共享黑板，用于节点间数据交换。
+//! - **[`Composite`]**：组合节点 trait，允许子节点的动态增删。
+//!
+//! ## 示例
+//!
+//! ```no_run
+//! use zenrc_bt::{BlackboardPtr, Node, Status};
+//!
+//! struct MyAction { status: Status, bb: Option<BlackboardPtr> }
+//! impl Node for MyAction {
+//!     fn update(&mut self) -> Status { Status::Success }
+//!     fn get_blackboard(&self) -> Option<BlackboardPtr> { self.bb.clone() }
+//!     fn set_blackboard(&mut self, bb: BlackboardPtr) { self.bb = Some(bb); }
+//!     fn get_status(&self) -> Status { self.status }
+//!     fn set_status(&mut self, s: Status) { self.status = s; }
+//! }
+//!
+//! let mut action = MyAction { status: Status::Invalid, bb: None };
+//! assert_eq!(action.tick(), Status::Success);
+//! ```
+
 use std::any::Any;
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
@@ -6,13 +35,20 @@ use std::sync::Arc;
 
 // box<dyn Any> 可以存储任何类型的数据
 // 通过 downcast_ref::<Type>() 来获取具体类型的引用
+/// 共享黑板句柄，封装了 `Arc<RefCell<HashMap<String, Box<dyn Any>>>>`。
+///
+/// 可在各节点间克隆共享，用于读写异质类型的运行时数据。
 #[derive(Clone)]
 pub struct BlackboardPtr(Arc<RefCell<HashMap<String, Box<dyn Any>>>>);
 
 impl BlackboardPtr {
+    /// 创建一个新的空黑板。
     pub fn new() -> Self {
         BlackboardPtr(Arc::new(RefCell::new(HashMap::new())))
     }
+    /// 按 `key` 获取类型为 `T` 的项。
+    ///
+    /// 若键不存在或类型不匹配，返回 `None`。
     pub fn get<'a, T: 'static>(&'a self, key: &str) -> Option<Ref<'a, T>> {
          Ref::filter_map(self.borrow(), |map| {
             map.get(key)?.downcast_ref::<T>()
@@ -39,6 +75,13 @@ pub enum Status {
 }
 
 /// 行为树节点 Trait
+///
+/// 所有可以加入行为树的节点必须实现此 trait。
+/// 驾驶方式为周期性调用 [`Node::tick`]，内部状态机按如下逻辑流转：
+///
+/// 1. 若当前状态不是 `Running`，先调用 [`initialize`](Node::initialize)。
+/// 2. 调用 [`update`](Node::update) 获取新状态。
+/// 3. 若新状态不是 `Running`，调用 [`terminate`](Node::terminate)。
 pub trait Node {
     /// 获取黑板
     fn get_blackboard(&self) -> Option<BlackboardPtr>;
@@ -92,6 +135,9 @@ pub trait Node {
     fn set_status(&mut self, s: Status);
 }
 
+/// 组合节点 trait，允许动态管理子节点集合。
+///
+/// 常见实现有：序列节点（Sequence）、选择节点（Selector）、并行节点（Parallel）。
 pub trait Composite: Node {
     fn add_child(&mut self, child: Box<dyn Node>);
     fn remove_child(&mut self, index: usize) -> Option<Box<dyn Node>>;

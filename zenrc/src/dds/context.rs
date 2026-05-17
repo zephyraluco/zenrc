@@ -206,7 +206,7 @@ impl DdsContext {
     /// 使用默认 QoS 创建上下文，同时创建域参与者和后台 WaitSet 轮询线程
     ///
     /// # 参数
-    /// - `domain_id`：域 ID，使用 [`super::domain::DOMAIN_DEFAULT`] 让系统自动选择
+    /// - `domain_id`：域 ID，使用 [`DOMAIN_DEFAULT`] 让系统自动选择
     pub fn new(domain_id: u32) -> Result<Self> {
         Self::new_with_qos(domain_id, None)
     }
@@ -356,8 +356,8 @@ impl DdsContext {
     /// 请求主题：`rq/<service_name>Request`，应答主题：`rr/<service_name>Reply`。
     /// 这使得 `ros2 service list` 能够发现该服务。
     ///
-    /// reader 自动注册到本上下文的共享 WaitSet，用户在自己的循环中调用
-    /// [`ServiceServer::next`] 驱动请求处理。
+    /// reader 自动注册到本上下文的共享 WaitSet，用户调用
+    /// [`ServiceServer::set_event`](super::service::ServiceServer::set_event) 注册事件回调。
     pub fn create_service<Req, Res>(
         &self,
         service_name: &str,

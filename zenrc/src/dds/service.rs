@@ -18,7 +18,7 @@ use super::topic::Topic;
 /// 请求主题：`rq/{name}Request`，应答主题：`rr/{name}Reply`。
 ///
 /// 通过 [`super::context::DdsContext::create_service`] 创建。
-/// 调用 [`ServiceServer::next`] 驱动请求处理。
+/// 调用 [`ServiceServer::set_event`] 注册异步事件回调。
 pub struct ServiceServer<Req: RawMessageBridge, Res: RawMessageBridge> {
     reader: dds_entity_t,
     writer: dds_entity_t,
@@ -121,7 +121,7 @@ unsafe impl<Req: RawMessageBridge, Res: RawMessageBridge> Sync for ServiceServer
 
 /// DDS 服务客户端，发送请求并阻塞等待应答。
 ///
-/// 通过 [`super::context::DomainParticipant::create_client`] 创建。
+/// 通过 [`super::context::DdsContext::create_client`] 创建。
 pub struct ServiceClient<Req: RawMessageBridge, Res: RawMessageBridge> {
     writer: dds_entity_t,
     reader: dds_entity_t,
