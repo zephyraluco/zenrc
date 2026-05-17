@@ -4,6 +4,30 @@ zenrc 是一个面向机器人控制系统的 Rust 工具集，提供行为树�
 
 ## 功能
 
+### zenrc
+DDS 封装层，基于 `zenrc-dds` 提供符合人体工程学的高层接口。
+
+- `DdsContext`：统一管理 DDS 实体的生命周期
+- `Publisher<T>` / `Subscription<T>`：类型安全的发布/订阅
+- `ServiceServer<Req, Res>` / `ServiceClient<Req, Res>`：请求-响应服务模式
+- 基于 `async`（tokio）的事件回调与异步 stream
+- `Qos` builder 提供常用默认策略
+
+### zenrc-dds
+CycloneDDS 的底层 Rust FFI 绑定。
+
+- 使用 `bindgen` 自动生成 C API 绑定
+- `build.rs` 驱动 IDL 编译与 ROS2 消息绑定生成
+- 通过环境变量（`AMENT_PREFIX_PATH`、`CMAKE_PREFIX_PATH` 等）自动发现消息包
+- 基于 SHA256 的构建缓存，避免重复生成
+
+### zenrc-msgen
+IDL / ROS2 消息代码生成的可复用构建工具库。
+
+- `compile_idl_libs`：将 `idlc` 生成的 `.c` 文件编译为静态库
+- `generate_msg_bindings`：为 IDL 头文件生成 Rust `bindgen` 绑定
+- `generate_rust_wrappers`：生成类型安全的 Rust 包装代码
+
 ### zenrc-bt
 轻量级行为树库，用于实现机器人决策逻辑。
 
@@ -27,23 +51,6 @@ zenrc 是一个面向机器人控制系统的 Rust 工具集，提供行为树�
 - 实现无锁环形缓冲区
 - 支持 Apache Arrow 数据格式
 
-### zenrc-dds
-DDS（Data Distribution Service）的 Rust 绑定。
-
-- 使用 bindgen 自动生成 FFI 绑定
-- 支持发布-订阅模式的分布式数据通信
-
-### zenrc-rcl
-ROS2 RCL（ROS Client Library）的 Rust FFI 绑定。
-
-- 自动生成 ROS2 C API 的 Rust 绑定
-- 支持多个 ROS2 发行版（Foxy、Galactic、Humble、Iron、Jazzy、Rolling）
-- 智能缓存机制加速构建
-- 跨平台支持（Linux/macOS/Windows）
-
-### zenrc-macros
-为其他 zenrc 模块提供过程宏支持。
-
 ## 依赖
 
 主要依赖项：
@@ -51,16 +58,17 @@ ROS2 RCL（ROS Client Library）的 Rust FFI 绑定。
 - `nix` - POSIX API 绑定
 - `arrow` - Apache Arrow 数据格式
 - `tracing` / `tracing-subscriber` - 日志追踪
+- `tokio` - 异步运行时
 - `crossbeam-channel` - 并发通道
 - `bindgen` - C/C++ 绑定生成
 - `thiserror` / `anyhow` - 错误处理
 
 ## 路线图
 
-- [ ] 完善 zenrc-dds 的 API 封装
-- [ ] 完善 zenrc-rcl 的 API 封装
+- [x] 实现基于 CycloneDDS 的 DDS 封装层
+- [x] 实现`sub`/`pub`、`service`/`client`通信方式
+- [ ] 完善 zenrc DDS 封装层的 API
 - [ ] 为各模块添加完整的文档和示例
-- [ ] 添加性能基准测试
 - [ ] 支持更多行为树节点类型
 - [ ] 优化共享内存的零拷贝性能
 
@@ -74,8 +82,14 @@ cargo build --workspace
 cargo test --workspace
 
 # 运行示例
-cargo run --example printonde -p zenrc-bt
-cargo run --example span -p zenrc-log
+cargo run --example pub_sub -p zenrc          # DDS 发布/订阅
+cargo run --example service_client -p zenrc   # 服务/客户端模式
+cargo run --example cdr_bridge -p zenrc       # CDR 序列化桥接
+cargo run --example loan_read -p zenrc        # 借用读取 API
+cargo run --example printonde -p zenrc-bt     # 行为树示例
+
+# 性能基准测试
+cargo bench -p zenrc
 ```
 
 ## CycloneDDS 配置
