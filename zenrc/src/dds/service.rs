@@ -11,7 +11,6 @@ use super::error::{DdsError, Result, check_entity, check_ret};
 use super::qos::duration_to_nanos;
 use super::topic::Topic;
 
-// ─── ServiceServer ─────────────────────────────────────────────────────────────
 
 /// DDS 服务端，监听请求主题并处理请求、发布应答。
 ///
@@ -113,11 +112,8 @@ impl<Req: RawMessageBridge, Res: RawMessageBridge> Drop for ServiceServer<Req, R
     }
 }
 
-// SAFETY: dds_entity_t 只是 i32，DDS 内部线程安全
 unsafe impl<Req: RawMessageBridge, Res: RawMessageBridge> Send for ServiceServer<Req, Res> {}
 unsafe impl<Req: RawMessageBridge, Res: RawMessageBridge> Sync for ServiceServer<Req, Res> {}
-
-// ─── ServiceClient ─────────────────────────────────────────────────────────────
 
 /// DDS 服务客户端，发送请求并阻塞等待应答。
 ///

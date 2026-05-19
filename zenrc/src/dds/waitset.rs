@@ -40,7 +40,6 @@ impl WaitSet {
         Ok(Self { entity })
     }
 
-    // ── 附加条件 ──────────────────────────────────────────────────────────────
 
     /// 将订阅者的读者实体附加到等待集，`token` 用于在 [`WaitSet::wait`] 结果中识别
     pub fn attach_reader<T: RawMessageBridge>(
@@ -74,7 +73,6 @@ impl WaitSet {
         check_ret(unsafe { zenrc_dds::dds_waitset_detach(self.entity, entity) })
     }
 
-    // ── 守护条件 ──────────────────────────────────────────────────────────────
 
     /// 创建守护条件（GuardCondition），允许外部线程触发等待集
     pub fn create_guard_condition(&self) -> Result<GuardCondition> {
@@ -83,7 +81,6 @@ impl WaitSet {
         Ok(GuardCondition { entity })
     }
 
-    // ── 等待 ──────────────────────────────────────────────────────────────────
 
     /// 阻塞等待，直到有条件触发或超时
     ///
@@ -129,7 +126,6 @@ impl WaitSet {
         self.entity
     }
 
-    // ── 内部 ──────────────────────────────────────────────────────────────────
 
     fn wait_until_ns(&self, timeout_ns: i64) -> Result<WaitResult> {
         const MAX_TRIGGERS: usize = 32;
@@ -144,6 +140,7 @@ impl WaitSet {
         };
         self.handle_wait_result(n, xs)
     }
+
 
     fn handle_wait_result(
         &self,
@@ -167,7 +164,6 @@ impl Drop for WaitSet {
 unsafe impl Send for WaitSet {}
 unsafe impl Sync for WaitSet {}
 
-// ─── GuardCondition ────────────────────────────────────────────────────────────
 
 /// DDS 守护条件，可由外部线程触发以唤醒等待集。
 pub struct GuardCondition {

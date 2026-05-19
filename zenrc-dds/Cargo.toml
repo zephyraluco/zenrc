@@ -13,3 +13,7 @@ bindgen = { workspace = true }
 pkg-config = { workspace = true }
 cc = { workspace = true }
 sha2 = { workspace = true }
+
+[package.metadata.docs.rs]
+# 开启 unstable-options 以支持 docsrs 属性配置
+rustdoc-args = ["--cfg", "docsrs"]

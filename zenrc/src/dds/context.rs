@@ -14,17 +14,10 @@ use super::qos::Qos;
 use super::subscriber::Subscription;
 use super::topic::Topic;
 
-// ─── 常量 ─────────────────────────────────────────────────────────────────────
-
 /// 让 CycloneDDS 自动选择域 ID（等同于 `DDS_DOMAIN_DEFAULT = UINT32_MAX`）
 pub const DOMAIN_DEFAULT: u32 = u32::MAX;
 
-// ─── DomainParticipant ────────────────────────────────────────────────────────
-
 /// DDS 域参与者（Domain Participant），是创建 Publisher 和 Subscription 的工厂。
-///
-/// 内部使用 [`Arc`] 共享，保证在所有派生对象销毁之前不会删除底层 DDS 实体。
-/// 通常通过 [`DdsContext::new`] 隐式创建，可通过 `ctx.participant` 访问。
 #[derive(Clone)]
 pub struct DomainParticipant {
     entity: dds_entity_t,
@@ -146,8 +139,6 @@ impl DomainParticipant {
 
 }
 
-// ─── 内部常量 ──────────────────────────────────────────────────────────────────
-
 /// 守护条件 attach token，用于唤醒/停止后台线程
 const WAKE_TOKEN: dds_attach_t = 0;
 
@@ -157,18 +148,12 @@ const POLL_TIMEOUT_NS: i64 = 100_000_000;
 /// WaitSet 单次最大触发条件数
 const MAX_TRIGGERS: usize = 64;
 
-// ─── 内部结构 ──────────────────────────────────────────────────────────────────
-
 struct ReaderEntry {
     /// 已附加到 WaitSet 的 ReadCondition 实体句柄
     readcond: dds_entity_t,
     /// 数据到达时唤醒等待方的通知句柄
     notify: Arc<tokio::sync::Notify>,
 }
-
-
-
-// ─── DdsContext ────────────────────────────────────────────────────────────────
 
 /// DDS 上下文（RAII），包含 [`DomainParticipant`] 和后台 WaitSet 轮询线程。
 ///
@@ -216,10 +201,8 @@ impl DdsContext {
         let participant = DomainParticipant::new_with_qos(domain_id, qos)?;
         let participant_entity = participant.entity();
 
-        // 创建 WaitSet
         let ws = check_entity(unsafe { zenrc_dds::dds_create_waitset(participant_entity) })?;
 
-        // 创建守护条件（用于唤醒/停止后台线程）
         let guard = match check_entity(unsafe {
             zenrc_dds::dds_create_guardcondition(participant_entity)
         }) {
@@ -230,7 +213,6 @@ impl DdsContext {
             }
         };
 
-        // 将守护条件附加到 WaitSet（token = WAKE_TOKEN = 0）
         if let Err(e) = check_ret(unsafe {
             zenrc_dds::dds_waitset_attach(ws, guard, WAKE_TOKEN)
         }) {
@@ -268,8 +250,6 @@ impl DdsContext {
         })
     }
 
-    // ── 域管理 ──────────────────────────────────────────────────────────────
-
     /// 获取域 ID
     pub fn domain_id(&self) -> Result<u32> {
         self.participant.domain_id()
@@ -285,8 +265,6 @@ impl DdsContext {
         DomainParticipant::lookup_participants(domain_id)
     }
 
-    // ── Topic 工厂 ─────────────────────────────────────────────────────────
-
     /// 创建带默认 QoS 的 Topic
     pub fn create_topic<T: RawMessageBridge>(&self, name: &str) -> Result<Topic<T>> {
         self.participant.create_topic(name)
@@ -301,12 +279,7 @@ impl DdsContext {
         self.participant.create_topic_with_qos(name, qos)
     }
 
-    // ── Publisher 工厂 ─────────────────────────────────────────────────────
-
     /// 创建发布者（自动创建 Topic）
-    ///
-    /// # 泛型参数
-    /// - `T`：安全的 Rust 消息类型，必须实现 [`RawMessageBridge`]
     pub fn create_publisher<T: RawMessageBridge>(
         &self,
         topic_name: &str,
@@ -315,15 +288,10 @@ impl DdsContext {
         self.participant.create_publisher(topic_name, qos)
     }
 
-    // ── Subscription 工厂 ─────────────────────────────────────────────────
-
     /// 创建订阅者（自动创建 Topic），并将 ReadCondition 附加到本上下文的 WaitSet。
     ///
     /// 通过此方法创建的 `Subscription` 支持 `set_event` 事件回调。
     /// 若只需同步访问，可直接使用 `ctx.participant.create_subscriber()`。
-    ///
-    /// # 泛型参数
-    /// - `T`：安全的 Rust 消息类型，必须实现 [`RawMessageBridge`]
     pub fn create_subscriber<T: RawMessageBridge>(
         &self,
         topic_name: &str,
@@ -454,13 +422,10 @@ impl Drop for DdsContext {
         if let Some(handle) = self.thread.take() {
             let _ = handle.join();
         }
-        // 后台线程已退出，安全清理 DDS 资源
         unsafe { zenrc_dds::dds_delete(self.waitset) };
         unsafe { zenrc_dds::dds_delete(self.guard) };
     }
 }
-
-// ─── 后台轮询 ─────────────────────────────────────────────────────────────────
 
 /// 在后台 OS 线程中持续轮询 WaitSet，有条件触发时唤醒对应订阅者的 Notify。
 fn context_loop(
@@ -472,7 +437,6 @@ fn context_loop(
     let mut readers: HashMap<isize, ReaderEntry> = HashMap::new();
 
     while running.load(Ordering::Acquire) {
-        // ── 处理新增 reader：创建 ReadCondition 并附加到 WaitSet ───────────────
         {
             let new_readers: Vec<_> = pending.lock().unwrap().drain(..).collect();
             for (reader, notify) in new_readers {
@@ -495,9 +459,7 @@ fn context_loop(
             }
         }
 
-        // ── 每次循环先扫描已失效的订阅者，更新 WaitSet ─────────────────────────
         {
-            // 收集 reader 实体已被删除的条目（dds_get_parent 返回负值表示实体无效）
             let stale: Vec<isize> = readers
                 .iter()
                 .filter(|&(&token, _)| unsafe {
@@ -507,7 +469,6 @@ fn context_loop(
                 .collect();
             for token in stale {
                 if let Some(entry) = readers.remove(&token) {
-                    // 从 WaitSet 移除对应 ReadCondition 并释放
                     unsafe { zenrc_dds::dds_waitset_detach(waitset, entry.readcond) };
                     unsafe { zenrc_dds::dds_delete(entry.readcond) };
                 }
@@ -525,32 +486,26 @@ fn context_loop(
         };
 
         if n < 0 {
-            // WaitSet 出错（实体已被删除等），退出循环
             break;
         }
 
-        // n == 0：超时，无条件触发，继续检测 running 标志
         xs.truncate(n as usize);
 
         for token in xs {
             if token == WAKE_TOKEN {
-                // 重置守护条件，避免持续触发
                 unsafe { zenrc_dds::dds_set_guardcondition(guard, false) };
                 continue;
             }
 
-            // 唤醒对应订阅者：取 Arc<Notify> 后在锁外调用，防止死锁
             {
                 let notify = readers.get(&token).map(|e| Arc::clone(&e.notify));
                 if let Some(n) = notify {
-                    // notify_one 存储一个 permit，即使当前无等待方也不丢失
                     n.notify_one();
                 }
             }
         }
     }
 
-    // 后台线程退出前清理所有 ReadCondition
     for entry in readers.values() {
         unsafe { zenrc_dds::dds_delete(entry.readcond) };
     }

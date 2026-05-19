@@ -1,36 +1,18 @@
-use std::time::Duration;
-
-use zenrc::dds::context::DdsContext;
+use zenrc::dds::context::{DOMAIN_DEFAULT, DdsContext};
 use zenrc::dds::qos::Qos;
 use zenrc::msg::std_msgs;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let ctx = DdsContext::new(0)?;
-
-    let publisher = ctx.create_publisher::<std_msgs::msg::String>(
-        "demo_chatter",
-        Qos::sensor_data(),
-    )?;
-    let subscriber = ctx.create_subscriber::<std_msgs::msg::String>(
-        "demo_chatter",
-        Qos::sensor_data(),
-    )?;
-
-    let sub_task = subscriber.set_event(|sample| {
-        println!("[subscriber] 收到: {}", sample.data);
+async fn main() -> zenrc::dds::error::Result<()> {
+    let ctx = DdsContext::new(DOMAIN_DEFAULT)?;
+    let pub_ = ctx.create_publisher::<std_msgs::msg::String>("chatter", Qos::default())?;
+    let sub = ctx.create_subscriber::<std_msgs::msg::String>("chatter", Qos::default())?;
+    sub.set_event(|sample| {
+        println!("Received: {}", sample.data);
     })?;
-
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let mut i = 0u32;
-    loop {
-        let msg = std_msgs::msg::String {
-            data: format!("hello pub-sub #{i}"),
-        };
-        println!("[publisher] 发送: {}", msg.data);
-        publisher.publish(msg)?;
-        i += 1;
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-
+    pub_.publish(std_msgs::msg::String {
+        data: "hello".into(),
+    })?;
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    Ok(())
 }

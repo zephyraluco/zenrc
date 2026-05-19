@@ -42,22 +42,23 @@ pub(crate) fn collect_samples<T: RawMessageBridge>(
     Ok(result)
 }
 
-// ── take / read / peek 公共实现 ──────────────────────────────────────────────
-
-pub(crate) fn take<T: RawMessageBridge>(
+/// 取出最多 `max` 条样本（消耗，数据从缓存中移除）
+pub fn take<T: RawMessageBridge>(
     reader: dds_entity_t,
     max: usize,
 ) -> Result<Vec<Sample<T>>> {
     take_with_mask(reader, max, zenrc_dds::DDS_ANY_STATE)
 }
 
-pub(crate) fn take_one<T: RawMessageBridge>(
+/// 取出单条样本，无数据时返回 `None`
+pub fn take_one<T: RawMessageBridge>(
     reader: dds_entity_t,
 ) -> Result<Option<Sample<T>>> {
     Ok(take(reader, 1)?.into_iter().next())
 }
 
-pub(crate) fn take_with_mask<T: RawMessageBridge>(
+/// 按状态掩码取出最多 `max` 条样本
+pub fn take_with_mask<T: RawMessageBridge>(
     reader: dds_entity_t,
     max: usize,
     mask: u32,
@@ -65,20 +66,23 @@ pub(crate) fn take_with_mask<T: RawMessageBridge>(
     read_or_take(reader, max, mask, true)
 }
 
-pub(crate) fn read<T: RawMessageBridge>(
+/// 读取最多 `max` 条样本（数据保留在缓存中）
+pub fn read<T: RawMessageBridge>(
     reader: dds_entity_t,
     max: usize,
 ) -> Result<Vec<Sample<T>>> {
     read_with_mask(reader, max, zenrc_dds::DDS_ANY_STATE)
 }
 
-pub(crate) fn read_one<T: RawMessageBridge>(
+/// 读取单条样本，无数据时返回 `None`（数据保留在缓存中）
+pub fn read_one<T: RawMessageBridge>(
     reader: dds_entity_t,
 ) -> Result<Option<Sample<T>>> {
     Ok(read(reader, 1)?.into_iter().next())
 }
 
-pub(crate) fn read_wl<T: RawMessageBridge>(
+/// 以借用方式读取最多 `max` 条样本（零拷贝，数据保留在缓存中）
+pub fn read_wl<T: RawMessageBridge>(
     reader: dds_entity_t,
     max: usize,
 ) -> Result<Vec<LoanedSample<T>>> {
@@ -101,13 +105,15 @@ pub(crate) fn read_wl<T: RawMessageBridge>(
     Ok(result)
 }
 
-pub(crate) fn read_one_wl<T: RawMessageBridge>(
+/// 以借用方式读取单条样本（零拷贝），无数据时返回 `None`
+pub fn read_one_wl<T: RawMessageBridge>(
     reader: dds_entity_t,
 ) -> Result<Option<LoanedSample<T>>> {
     Ok(read_wl(reader, 1)?.into_iter().next())
 }
 
-pub(crate) fn read_with_mask<T: RawMessageBridge>(
+/// 按状态掩码读取最多 `max` 条样本（数据保留在缓存中）
+pub fn read_with_mask<T: RawMessageBridge>(
     reader: dds_entity_t,
     max: usize,
     mask: u32,
@@ -115,7 +121,8 @@ pub(crate) fn read_with_mask<T: RawMessageBridge>(
     read_or_take(reader, max, mask, false)
 }
 
-pub(crate) fn peek<T: RawMessageBridge>(
+/// 预览最多 `max` 条样本（不修改读取状态，不改变已读/未读标记）
+pub fn peek<T: RawMessageBridge>(
     reader: dds_entity_t,
     max: usize,
 ) -> Result<Vec<Sample<T>>> {
@@ -129,7 +136,8 @@ pub(crate) fn peek<T: RawMessageBridge>(
     collect_samples(n, raw_samples, infos)
 }
 
-pub(crate) fn take_wl<T: RawMessageBridge>(
+/// 以借用方式取出最多 `max` 条样本（零拷贝，数据从缓存中移除）
+pub fn take_wl<T: RawMessageBridge>(
     reader: dds_entity_t,
     max: usize,
 ) -> Result<Vec<LoanedSample<T>>> {
@@ -152,12 +160,14 @@ pub(crate) fn take_wl<T: RawMessageBridge>(
     Ok(result)
 }
 
-pub(crate) fn take_one_wl<T: RawMessageBridge>(
+/// 以借用方式取出单条样本（零拷贝），无数据时返回 `None`
+pub fn take_one_wl<T: RawMessageBridge>(
     reader: dds_entity_t,
 ) -> Result<Option<LoanedSample<T>>> {
     Ok(take_wl(reader, 1)?.into_iter().next())
 }
 
+/// 内部：按掩码读取或取出样本，`take=true` 时从缓存中移除
 fn read_or_take<T: RawMessageBridge>(
     reader: dds_entity_t,
     max: usize,
@@ -205,7 +215,8 @@ fn collect_cdr_samples(
     Ok(result)
 }
 
-pub(crate) fn peek_cdr(reader: dds_entity_t, max: usize) -> Result<Vec<CdrSample>> {
+/// 预览最多 `max` 条 CDR 原始样本（不修改读取状态）
+pub fn peek_cdr(reader: dds_entity_t, max: usize) -> Result<Vec<CdrSample>> {
     if max == 0 {
         return Ok(Vec::new());
     }
@@ -222,7 +233,8 @@ pub(crate) fn peek_cdr(reader: dds_entity_t, max: usize) -> Result<Vec<CdrSample
     collect_cdr_samples(n, raw_cdrs, infos)
 }
 
-pub(crate) fn read_cdr(reader: dds_entity_t, max: usize) -> Result<Vec<CdrSample>> {
+/// 读取最多 `max` 条 CDR 原始样本（数据保留在缓存中）
+pub fn read_cdr(reader: dds_entity_t, max: usize) -> Result<Vec<CdrSample>> {
     if max == 0 {
         return Ok(Vec::new());
     }
@@ -239,7 +251,8 @@ pub(crate) fn read_cdr(reader: dds_entity_t, max: usize) -> Result<Vec<CdrSample
     collect_cdr_samples(n, raw_cdrs, infos)
 }
 
-pub(crate) fn take_cdr(reader: dds_entity_t, max: usize) -> Result<Vec<CdrSample>> {
+/// 取出最多 `max` 条 CDR 原始样本（数据从缓存中移除）
+pub fn take_cdr(reader: dds_entity_t, max: usize) -> Result<Vec<CdrSample>> {
     if max == 0 {
         return Ok(Vec::new());
     }

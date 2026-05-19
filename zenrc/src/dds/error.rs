@@ -42,6 +42,7 @@ pub(crate) fn check_ret(ret: zenrc_dds::dds_return_t) -> Result<()> {
     }
 }
 
+/// 将 DDS 错误码转换为带描述字符串的 [`DdsError::RetCode`]
 fn dds_err(code: i32) -> DdsError {
     let msg = unsafe {
         let ptr = zenrc_dds::dds_strretcode(code);

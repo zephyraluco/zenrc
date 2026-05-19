@@ -19,12 +19,7 @@ use super::common::{
 use super::error::{DdsError, Result, check_entity, check_ret};
 use super::topic::Topic;
 
-// ─── Subscription<T> ───────────────────────────────────────────────────────────
-
-/// 类型化 DDS 读者（Subscription），使用安全类型 T。
-///
-/// T 是一个实现 RawMessageBridge 的 Rust 类型。
-/// 内部工作于 T::CStruct（C 原始类型），对用户透明地转换为 T。
+/// 类型化 DDS 读者（Subscription）。
 pub struct Subscription<T: RawMessageBridge> {
     reader: dds_entity_t,
     topic: Topic<T>,
@@ -53,8 +48,6 @@ impl<T: RawMessageBridge> Subscription<T> {
         let notify = Some(context.attach(self.reader));
         self.notify = notify;
     }
-
-    // ── 状态查询 ──────────────────────────────────────────────────────────────
 
     /// 获取订阅匹配状态（有多少发布者与该读者匹配）
     pub fn subscription_matched_status(
@@ -143,7 +136,6 @@ impl<T: RawMessageBridge> Subscription<T> {
 
 }
 
-// ─── 异步扩展 ─────────────────────────────────────────────────────────────────
 
 impl<T: RawMessageBridge + Send + 'static> Subscription<T> {
     /// 注册事件回调：当共享 WaitSet 的 notify 被唤醒时，在 tokio 任务中处理所有新样本。
@@ -181,8 +173,6 @@ impl<T: RawMessageBridge + Send + 'static> Subscription<T> {
 
 impl<T: RawMessageBridge> Drop for Subscription<T> {
     fn drop(&mut self) {
-        // 直接删除 reader 实体；后台线程会在下一轮循环检测到 reader 已失效，
-        // 自动将对应 ReadCondition 从 WaitSet 上移除并释放
         unsafe { zenrc_dds::dds_delete(self.reader) };
     }
 }

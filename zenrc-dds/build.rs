@@ -148,6 +148,9 @@ fn setup_ros_dds_idl_path() {
 }
 
 fn main() {
+    if env::var("DOCS_RS").is_ok() {
+        return;
+    }
     let dds = match pkg_config::Config::new().probe("CycloneDDS") {
         Ok(lib) => lib,
         Err(e) => panic!("Failed to find CycloneDDS via pkg-config: {}", e),
