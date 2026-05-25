@@ -19,46 +19,7 @@ include!(concat!(env!("OUT_DIR"), "/generate_types.rs"));
 
 // ─── docs.rs 构建桩（无 CycloneDDS 环境时提供最小类型定义）──────────────────
 #[cfg(docsrs)]
-pub use docsrs_stubs::*;
-#[cfg(docsrs)]
-mod docsrs_stubs {
-    use std::ffi::c_void;
-
-    pub type dds_entity_t          = i32;
-    pub type dds_time_t            = i64;
-    pub type dds_instance_handle_t = u64;
-    pub type dds_sample_state_t    = u32;
-    pub type dds_view_state_t      = u32;
-    pub type dds_instance_state_t  = u32;
-
-    pub const dds_sample_state_DDS_SST_READ:    dds_sample_state_t   = 1;
-    pub const dds_view_state_DDS_VST_NEW:       dds_view_state_t     = 1;
-    pub const dds_instance_state_DDS_IST_ALIVE: dds_instance_state_t = 1;
-
-    #[repr(C)]
-    pub struct dds_topic_descriptor_t { _private: [u8; 0] }
-
-    #[repr(C)]
-    #[derive(Debug, Clone, Copy)]
-    pub struct dds_sample_info_t {
-        pub sample_state:       dds_sample_state_t,
-        pub view_state:         dds_view_state_t,
-        pub instance_state:     dds_instance_state_t,
-        pub valid_data:         bool,
-        pub source_timestamp:   dds_time_t,
-        pub instance_handle:    dds_instance_handle_t,
-        pub publication_handle: dds_instance_handle_t,
-    }
-
-    #[repr(C)]
-    pub struct ddsi_serdata { _private: [u8; 0] }
-
-    pub unsafe extern "C" fn dds_return_loan(
-        _reader: dds_entity_t,
-        _buf: *mut *mut c_void,
-        _bufsz: i32,
-    ) -> i32 { 0 }
-}
+include!("bindings.rs");
 
 // ─── 消息桥接 trait（内部使用，供生成的安全类型实现）───────────────────────────
 
