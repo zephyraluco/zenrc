@@ -1,0 +1,18 @@
+[package]
+name = "zenrc-cli"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "CycloneDDS CLI tool: ls, ps, typeof, subscribe, publish, performance"
+
+[[bin]]
+name = "zenrc-cli"
+path = "src/main.rs"
+
+[dependencies]
+zenrc-dds = { path = "../zenrc-dds", version = "0.1.0" }
+clap = { version = "4", features = ["derive"] }
+anyhow = { workspace = true }
+ctrlc = { workspace = true }
+regex = "1"
+serde_json = "1"

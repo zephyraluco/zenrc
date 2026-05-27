@@ -55,7 +55,7 @@ fn touch(path: &Path) {
 
 pub fn generate_dds_bindings(dds_include_paths: &Vec<PathBuf>, out_dir: &Path) {
     let bindings = bindgen::Builder::default()
-        .header_contents("wrapper.h", "#include <dds/dds.h>")
+        .header("wrapper.h")
         .clang_args(
             dds_include_paths
                 .iter()
@@ -65,6 +65,11 @@ pub fn generate_dds_bindings(dds_include_paths: &Vec<PathBuf>, out_dir: &Path) {
         .allowlist_function("dds_.*")
         .allowlist_type("dds_.*")
         .allowlist_var("DDS_.*")
+        // XTypes TypeObject 结构体（DDS_XTypes_TypeObject / CompleteStructType 等）
+        .allowlist_type("DDS_XTypes_.*")
+        // ddsi_typelib.h 中的 typeinfo/typeid 工具函数
+        .allowlist_function("ddsi_typeinfo_.*")
+        .allowlist_function("ddsi_typeid_.*")
         .size_t_is_usize(true)
         .merge_extern_blocks(true)
         .generate_comments(true)
