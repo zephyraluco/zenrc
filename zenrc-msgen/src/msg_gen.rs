@@ -165,7 +165,7 @@ fn convert_field_type(
 ) -> Option<CFieldType> {
     Some(match ty {
         // 可变裸指针：仅 *mut c_char 视为堆字符串，其余指针类型无法安全映射
-        syn::Type::Ptr(p) if p.mutability.is_some() => {
+        syn::Type::Ptr(p) if matches!(p.mutability, syn::PointerMutability::Mut(_)) => {
             if is_c_char(&p.elem) {
                 CFieldType::OwnedStr
             } else {
