@@ -1,12 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["zenrc-log", "zenrc-bt", "zenrc-shm", "zenrc-dds", "zenrc", "zenrc-msgen", "zenrc-cli"]
+members = ["zenrc-log", "zenrc-bt", "zenrc-dds", "zenrc", "zenrc-msgen", "zenrc-cli"]
 
 [workspace.dependencies]
-nix = "0.31"
 time = "0.3"
 ctrlc = "3.5"
-arrow = "58"
 anyhow = "1.0"
 thiserror = "2"
 crossbeam-channel = "0.5"
@@ -15,12 +13,12 @@ tracing-subscriber = "0.3"
 tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "macros", "time"] }
 futures-core = "0.3"
 futures = "0.3"
-bindgen = "0.72"
+bindgen = "0.73"
 pkg-config = "0.3"
-cc = "1.2"
+cc = "1.7"
 sha2 = "0.11"
 proc-macro2 = "1"
 quote = "1.0"
-syn = "2.0"
-prettyplease = "0.2"
+syn = "3.0"
+prettyplease = "0.3"
 criterion = "0.8"
